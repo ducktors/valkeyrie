@@ -2,16 +2,19 @@
   "name": "valkeyrie",
   "version": "0.1.0",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/cjs/valkeyrie.js",
+  "module": "dist/esm/valkeyrie.js",
+  "types": "dist/esm/valkeyrie.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/valkeyrie.js",
-      "require": "./dist/valkeyrie.js"
+      "import": "./dist/esm/valkeyrie.js",
+      "require": "./dist/cjs/valkeyrie.js",
+      "types": "./dist/esm/valkeyrie.d.ts"
     },
     "./KvU64": {
-      "import": "./dist/kv-u64.js",
-      "require": "./dist/kv-u64.js"
+      "import": "./dist/esm/kv-u64.js",
+      "require": "./dist/cjs/kv-u64.js",
+      "types": "./dist/esm/kv-u64.d.ts"
     },
     "./package.json": "./package.json"
   },
@@ -35,7 +38,9 @@
   },
   "packageManager": "pnpm@10.6.2",
   "scripts": {
-    "build": "rimraf ./dist && tsc -p tsconfig.build.json",
+    "build": "rimraf ./dist && tsc -p tsconfig.build.json && tsc -p tsconfig.cjs.json && cp cjs-package.json dist/cjs/package.json",
+    "validate-exports": "validate-package-exports --check --verify --info",
+    "postbuild": "npm run validate-exports",
     "lint": "biome check src test",
     "fmt": "biome format src test",
     "release": "pnpm run build && changeset publish",
@@ -69,7 +74,8 @@
     "mitata": "^1.0.34",
     "rimraf": "^6.0.1",
     "tsx": "^4.19.3",
-    "typescript": "^5.8.2"
+    "typescript": "^5.8.2",
+    "validate-package-exports": "^0.8.0"
   },
   "files": [
     "dist"
