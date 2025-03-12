@@ -1,4 +1,3 @@
----
 # Valkeyrie - Key-Value Store
 
 <p align="center">
@@ -9,10 +8,24 @@
 
 [![GitHub package.json version](https://img.shields.io/github/package-json/v/ducktors/valkeyrie)](https://github.com/ducktors/valkeyrie/releases) ![node:22.14.0](https://img.shields.io/badge/node-22.14.0-lightgreen) ![pnpm@10.6.2](https://img.shields.io/badge/pnpm-10.6.2-yellow) [![npm](https://img.shields.io/npm/dt/valkeyrie)](https://www.npmjs.com/package/valkeyrie) [![CI](https://github.com/ducktors/valkeyrie/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ducktors/valkeyrie/actions/workflows/ci.yml) [![Test](https://github.com/ducktors/valkeyrie/actions/workflows/test.yaml/badge.svg?branch=main)](https://github.com/ducktors/valkeyrie/actions/workflows/test.yaml) [![Coverage Status](https://coveralls.io/repos/github/ducktors/valkeyrie/badge.svg)](https://coveralls.io/github/ducktors/valkeyrie) [![Maintainability](https://api.codeclimate.com/v1/badges/c1a77d6d8b158d442572/maintainability)](https://codeclimate.com/github/ducktors/valkeyrie/maintainability) [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/ducktors/valkeyrie/badge)](https://scorecard.dev/viewer/?uri=github.com/ducktors/valkeyrie) [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/10163/badge)](https://www.bestpractices.dev/projects/10163)
 
-Valkeyrie is a key-value store for Node.js applications. It provides the same API as Deno.kv for storing and retrieving data with support for complex data types, atomic operations, and efficient querying.
-The code is tested against Deno.kv tests to ensure 100% compatibility.
+Valkeyrie is a high-performance key-value store for Node.js applications that solves the problem of efficient data storage and retrieval in JavaScript environments. It brings the powerful Deno.kv API to Node.js, enabling developers to store complex data structures with atomic guarantees without the complexity of setting up external databases. Whether you need a lightweight database for your application, a caching layer, or a way to persist application state, Valkeyrie provides a simple yet powerful solution built on SQLite.
 
 This is a work in progress, but the API and everything already implemented is stable and ready for production.
+
+## Table of Contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Building from Source](#building-from-source)
+- [Quick Start](#quick-start)
+- [Key Concepts](#key-concepts)
+  - [Hierarchical Keys](#hierarchical-keys)
+  - [Value Types](#value-types)
+  - [Atomic Operations](#atomic-operations)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [Benchmarks](#benchmarks)
+- [License](#license)
 
 ## Features
 
@@ -36,6 +49,30 @@ npm install valkeyrie
 
 # Using yarn
 yarn add valkeyrie
+```
+
+## Building from Source
+
+Valkeyrie can be built entirely using Free/Libre and Open Source Software (FLOSS). The project requires:
+
+- Node.js (v22.14.0 or later recommended)
+- A package manager (pnpm, npm, or yarn)
+
+To build from source:
+
+```bash
+# Clone the repository
+git clone https://github.com/ducktors/valkeyrie.git
+cd valkeyrie
+
+# Install dependencies
+pnpm install
+
+# Build the project
+pnpm build
+
+# Run tests
+pnpm test
 ```
 
 ## Quick Start
@@ -109,6 +146,17 @@ await db.atomic()
 ## Documentation
 
 For complete documentation, see [DOCUMENTATION.md](./DOCUMENTATION.md).
+
+## Contributing
+
+We welcome contributions to Valkeyrie! Bug reports, feature requests, code contributions, and documentation improvements are all valuable to us.
+
+- **Bug Reports**: Please use the [GitHub Issues](https://github.com/ducktors/valkeyrie/issues) page to report bugs
+- **Feature Requests**: Feature requests can also be submitted through GitHub Issues
+- **Code Contributions**: Pull requests are welcome! See our contribution guidelines for more information
+- **Questions**: For questions about using Valkeyrie, please open a GitHub Discussion
+
+All documentation, bug reports, and communications are in English.
 
 ## Benchmarks
 
