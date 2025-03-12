@@ -121,7 +121,7 @@ await db.atomic()
 
 ## Documentation
 
-For complete documentation, see [DOCUMENTATION.md](./DOCUMENTATION.md).
+For complete documentation, see [Documentation](./DOCUMENTATION.md).
 
 ## Contributing
 
@@ -143,4 +143,4 @@ pnpm benchmark:atomic   # Atomic operations
 
 ## License
 
-Valkeyrie is licensed under the MIT License. See the [LICENSE](./LICENSE) file for details. 
+Valkeyrie is licensed under the MIT License. See the [License](./LICENSE) file for details. 
