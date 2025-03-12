@@ -30,6 +30,12 @@ This is a work in progress, but the API and everything already implemented is st
 ```bash
 # Using pnpm
 pnpm add valkeyrie
+
+# Using npm
+npm install valkeyrie
+
+# Using yarn
+yarn add valkeyrie
 ```
 
 ## Quick Start
