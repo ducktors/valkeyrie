@@ -274,6 +274,7 @@ export class Valkeyrie {
     Valkeyrie.internalConstructor = true
     const db = new Valkeyrie(await sqliteDriver(path))
     Valkeyrie.internalConstructor = false
+    await db.cleanup()
     return db
   }
 

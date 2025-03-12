@@ -1,4 +1,6 @@
 import assert, { AssertionError } from 'node:assert'
+import { randomUUID } from 'node:crypto'
+import path from 'node:path'
 import { describe, test } from 'node:test'
 import { inspect } from 'node:util'
 import { KvU64 } from '../src/kv-u64.js'
@@ -1511,4 +1513,887 @@ describe('test', async () => {
   //   assert(!j.done)
   //   assertType<IsExact<typeof j.value, Deno.KvEntry<string>>>(true)
   // }
+
+  // queueTest('basic listenQueue and enqueue', async (db) => {
+  //   const { promise, resolve } = Promise.withResolvers<void>()
+  //   let dequeuedMessage: unknown = null
+  //   const listener = db.listenQueue((msg) => {
+  //     dequeuedMessage = msg
+  //     resolve()
+  //   })
+  //   try {
+  //     const res = await db.enqueue('test')
+  //     assert(res.ok)
+  //     assertNotEquals(res.versionstamp, null)
+  //     await promise
+  //     assertEquals(dequeuedMessage, 'test')
+  //   } finally {
+  //     db.close()
+  //     await listener
+  //   }
+  // })
+
+  // for (const { name, value } of VALUE_CASES) {
+  //   queueTest(`listenQueue and enqueue ${name}`, async (db) => {
+  //     const numEnqueues = 10
+  //     let count = 0
+  //     const deferreds: ReturnType<typeof Promise.withResolvers<unknown>>[] = []
+  //     const listeners: Promise<void>[] = []
+  //     listeners.push(
+  //       db.listenQueue((msg: unknown) => {
+  //         deferreds[count++].resolve(msg)
+  //       }),
+  //     )
+  //     try {
+  //       for (let i = 0; i < numEnqueues; i++) {
+  //         deferreds.push(Promise.withResolvers<unknown>())
+  //         await db.enqueue(value)
+  //       }
+  //       const dequeuedMessages = await Promise.all(
+  //         deferreds.map(({ promise }) => promise),
+  //       )
+  //       for (let i = 0; i < numEnqueues; i++) {
+  //         assertEquals(dequeuedMessages[i], value)
+  //       }
+  //     } finally {
+  //       db.close()
+  //       for (const listener of listeners) {
+  //         await listener
+  //       }
+  //     }
+  //   })
+  // }
+
+  // queueTest('queue mixed types', async (db) => {
+  //   let deferred: ReturnType<typeof Promise.withResolvers<void>>
+  //   let dequeuedMessage: unknown = null
+  //   const listener = db.listenQueue((msg: unknown) => {
+  //     dequeuedMessage = msg
+  //     deferred.resolve()
+  //   })
+  //   try {
+  //     for (const item of VALUE_CASES) {
+  //       deferred = Promise.withResolvers<void>()
+  //       await db.enqueue(item.value)
+  //       await deferred.promise
+  //       assertEquals(dequeuedMessage, item.value)
+  //     }
+  //   } finally {
+  //     db.close()
+  //     await listener
+  //   }
+  // })
+
+  // queueTest('queue delay', async (db) => {
+  //   let dequeueTime: number | undefined
+  //   const { promise, resolve } = Promise.withResolvers<void>()
+  //   let dequeuedMessage: unknown = null
+  //   const listener = db.listenQueue((msg) => {
+  //     dequeueTime = Date.now()
+  //     dequeuedMessage = msg
+  //     resolve()
+  //   })
+  //   try {
+  //     const enqueueTime = Date.now()
+  //     await db.enqueue('test', { delay: 1000 })
+  //     await promise
+  //     assertEquals(dequeuedMessage, 'test')
+  //     assert(dequeueTime !== undefined)
+  //     assert(dequeueTime - enqueueTime >= 1000)
+  //   } finally {
+  //     db.close()
+  //     await listener
+  //   }
+  // })
+
+  // queueTest('queue delay with atomic', async (db) => {
+  //   let dequeueTime: number | undefined
+  //   const { promise, resolve } = Promise.withResolvers<void>()
+  //   let dequeuedMessage: unknown = null
+  //   const listener = db.listenQueue((msg) => {
+  //     dequeueTime = Date.now()
+  //     dequeuedMessage = msg
+  //     resolve()
+  //   })
+  //   try {
+  //     const enqueueTime = Date.now()
+  //     const res = await db.atomic().enqueue('test', { delay: 1000 }).commit()
+  //     assert(res.ok)
+
+  //     await promise
+  //     assertEquals(dequeuedMessage, 'test')
+  //     assert(dequeueTime !== undefined)
+  //     assert(dequeueTime - enqueueTime >= 1000)
+  //   } finally {
+  //     db.close()
+  //     await listener
+  //   }
+  // })
+
+  // queueTest('queue delay and now', async (db) => {
+  //   let count = 0
+  //   let dequeueTime: number | undefined
+  //   const { promise, resolve } = Promise.withResolvers<void>()
+  //   let dequeuedMessage: unknown = null
+  //   const listener = db.listenQueue((msg) => {
+  //     count += 1
+  //     if (count == 2) {
+  //       dequeueTime = Date.now()
+  //       dequeuedMessage = msg
+  //       resolve()
+  //     }
+  //   })
+  //   try {
+  //     const enqueueTime = Date.now()
+  //     await db.enqueue('test-1000', { delay: 1000 })
+  //     await db.enqueue('test')
+  //     await promise
+  //     assertEquals(dequeuedMessage, 'test-1000')
+  //     assert(dequeueTime !== undefined)
+  //     assert(dequeueTime - enqueueTime >= 1000)
+  //   } finally {
+  //     db.close()
+  //     await listener
+  //   }
+  // })
+
+  // dbTest('queue negative delay', async (db) => {
+  //   await assertRejects(async () => {
+  //     await db.enqueue('test', { delay: -100 })
+  //   }, TypeError)
+  // })
+
+  // dbTest('queue nan delay', async (db) => {
+  //   await assertRejects(async () => {
+  //     await db.enqueue('test', { delay: Number.NaN })
+  //   }, TypeError)
+  // })
+
+  // dbTest('queue large delay', async (db) => {
+  //   await db.enqueue('test', { delay: 30 * 24 * 60 * 60 * 1000 })
+  //   await assertRejects(async () => {
+  //     await db.enqueue('test', { delay: 30 * 24 * 60 * 60 * 1000 + 1 })
+  //   }, TypeError)
+  // })
+
+  // queueTest('listenQueue with async callback', async (db) => {
+  //   const { promise, resolve } = Promise.withResolvers<void>()
+  //   let dequeuedMessage: unknown = null
+  //   const listener = db.listenQueue(async (msg) => {
+  //     dequeuedMessage = msg
+  //     await sleep(100)
+  //     resolve()
+  //   })
+  //   try {
+  //     await db.enqueue('test')
+  //     await promise
+  //     assertEquals(dequeuedMessage, 'test')
+  //   } finally {
+  //     db.close()
+  //     await listener
+  //   }
+  // })
+
+  // queueTest('queue retries', async (db) => {
+  //   let count = 0
+  //   const listener = db.listenQueue(async (_msg) => {
+  //     count += 1
+  //     await sleep(10)
+  //     throw new TypeError('dequeue error')
+  //   })
+  //   try {
+  //     await db.enqueue('test')
+  //     await sleep(10000)
+  //   } finally {
+  //     db.close()
+  //     await listener
+  //   }
+
+  //   // There should have been 1 attempt + 3 retries in the 10 seconds
+  //   assertEquals(4, count)
+  // })
+
+  // queueTest('queue retries with backoffSchedule', async (db) => {
+  //   let count = 0
+  //   const listener = db.listenQueue((_msg) => {
+  //     count += 1
+  //     throw new TypeError('Dequeue error')
+  //   })
+  //   try {
+  //     await db.enqueue('test', { backoffSchedule: [1] })
+  //     await sleep(2000)
+  //   } finally {
+  //     db.close()
+  //     await listener
+  //   }
+
+  //   // There should have been 1 attempt + 1 retry
+  //   assertEquals(2, count)
+  // })
+
+  // queueTest('multiple listenQueues', async (db) => {
+  //   const numListens = 10
+  //   let count = 0
+  //   const deferreds: ReturnType<typeof Promise.withResolvers<void>>[] = []
+  //   const dequeuedMessages: unknown[] = []
+  //   const listeners: Promise<void>[] = []
+  //   for (let i = 0; i < numListens; i++) {
+  //     listeners.push(
+  //       db.listenQueue((msg) => {
+  //         dequeuedMessages.push(msg)
+  //         deferreds[count++].resolve()
+  //       }),
+  //     )
+  //   }
+  //   try {
+  //     for (let i = 0; i < numListens; i++) {
+  //       deferreds.push(Promise.withResolvers<void>())
+  //       await db.enqueue('msg_' + i)
+  //       await deferreds[i].promise
+  //       const msg = dequeuedMessages[i]
+  //       assertEquals('msg_' + i, msg)
+  //     }
+  //   } finally {
+  //     db.close()
+  //     for (let i = 0; i < numListens; i++) {
+  //       await listeners[i]
+  //     }
+  //   }
+  // })
+
+  // queueTest('enqueue with atomic', async (db) => {
+  //   const { promise, resolve } = Promise.withResolvers<void>()
+  //   let dequeuedMessage: unknown = null
+  //   const listener = db.listenQueue((msg) => {
+  //     dequeuedMessage = msg
+  //     resolve()
+  //   })
+
+  //   try {
+  //     await db.set(['t'], '1')
+
+  //     let currentValue = await db.get(['t'])
+  //     assertEquals('1', currentValue.value)
+
+  //     const res = await db
+  //       .atomic()
+  //       .check(currentValue)
+  //       .set(currentValue.key, '2')
+  //       .enqueue('test')
+  //       .commit()
+  //     assert(res.ok)
+
+  //     await promise
+  //     assertEquals('test', dequeuedMessage)
+
+  //     currentValue = await db.get(['t'])
+  //     assertEquals('2', currentValue.value)
+  //   } finally {
+  //     db.close()
+  //     await listener
+  //   }
+  // })
+
+  // queueTest('enqueue with atomic nonce', async (db) => {
+  //   const { promise, resolve } = Promise.withResolvers<void>()
+  //   let dequeuedMessage: unknown = null
+
+  //   const nonce = crypto.randomUUID()
+
+  //   const listener = db.listenQueue(async (val) => {
+  //     const message = val as { msg: string; nonce: string }
+  //     const nonce = message.nonce
+  //     const nonceValue = await db.get(['nonces', nonce])
+  //     if (nonceValue.versionstamp === null) {
+  //       dequeuedMessage = message.msg
+  //       resolve()
+  //       return
+  //     }
+
+  //     assertNotEquals(nonceValue.versionstamp, null)
+  //     const res = await db
+  //       .atomic()
+  //       .check(nonceValue)
+  //       .delete(['nonces', nonce])
+  //       .set(['a', 'b'], message.msg)
+  //       .commit()
+  //     if (res.ok) {
+  //       // Simulate an error so that the message has to be redelivered
+  //       throw new Error('injected error')
+  //     }
+  //   })
+
+  //   try {
+  //     const res = await db
+  //       .atomic()
+  //       .check({ key: ['nonces', nonce], versionstamp: null })
+  //       .set(['nonces', nonce], true)
+  //       .enqueue({ msg: 'test', nonce })
+  //       .commit()
+  //     assert(res.ok)
+
+  //     await promise
+  //     assertEquals('test', dequeuedMessage)
+
+  //     const currentValue = await db.get(['a', 'b'])
+  //     assertEquals('test', currentValue.value)
+
+  //     const nonceValue = await db.get(['nonces', nonce])
+  //     assertEquals(nonceValue.versionstamp, null)
+  //   } finally {
+  //     db.close()
+  //     await listener
+  //   }
+  // })
+
+  // Deno.test({
+  //   name: 'queue persistence with inflight messages',
+  //   sanitizeOps: false,
+  //   sanitizeResources: false,
+  //   async fn() {
+  //     const filename = await Deno.makeTempFile({ prefix: 'queue_db' })
+  //     try {
+  //       let db: Deno.Kv = await Deno.openKv(filename)
+
+  //       let count = 0
+  //       let deferred = Promise.withResolvers<void>()
+
+  //       // Register long-running handler.
+  //       let listener = db.listenQueue(async (_msg) => {
+  //         count += 1
+  //         if (count == 3) {
+  //           deferred.resolve()
+  //         }
+  //         await new Promise(() => {})
+  //       })
+
+  //       // Enqueue 3 messages.
+  //       await db.enqueue('msg0')
+  //       await db.enqueue('msg1')
+  //       await db.enqueue('msg2')
+  //       await deferred.promise
+
+  //       // Close the database and wait for the listener to finish.
+  //       db.close()
+  //       await listener
+
+  //       // Wait at least MESSAGE_DEADLINE_TIMEOUT before reopening the database.
+  //       // This ensures that inflight messages are requeued immediately after
+  //       // the database is reopened.
+  //       // https://github.com/denoland/denokv/blob/efb98a1357d37291a225ed5cf1fc4ecc7c737fab/sqlite/backend.rs#L120
+  //       await sleep(6000)
+
+  //       // Now reopen the database.
+  //       db = await Deno.openKv(filename)
+
+  //       count = 0
+  //       deferred = Promise.withResolvers<void>()
+
+  //       // Register a handler that will complete quickly.
+  //       listener = db.listenQueue((_msg) => {
+  //         count += 1
+  //         if (count == 3) {
+  //           deferred.resolve()
+  //         }
+  //       })
+
+  //       // Wait for the handlers to finish.
+  //       await deferred.promise
+  //       assertEquals(3, count)
+  //       db.close()
+  //       await listener
+  //     } finally {
+  //       try {
+  //         await Deno.remove(filename)
+  //       } catch {
+  //         // pass
+  //       }
+  //     }
+  //   },
+  // })
+
+  // Deno.test({
+  //   name: 'queue persistence with delay messages',
+  //   async fn() {
+  //     const filename = await Deno.makeTempFile({ prefix: 'queue_db' })
+  //     try {
+  //       await Deno.remove(filename)
+  //     } catch {
+  //       // pass
+  //     }
+  //     try {
+  //       let db: Deno.Kv = await Deno.openKv(filename)
+
+  //       let count = 0
+  //       let deferred = Promise.withResolvers<void>()
+
+  //       // Register long-running handler.
+  //       let listener = db.listenQueue((_msg) => {})
+
+  //       // Enqueue 3 messages into the future.
+  //       await db.enqueue('msg0', { delay: 10000 })
+  //       await db.enqueue('msg1', { delay: 10000 })
+  //       await db.enqueue('msg2', { delay: 10000 })
+
+  //       // Close the database and wait for the listener to finish.
+  //       db.close()
+  //       await listener
+
+  //       // Now reopen the database.
+  //       db = await Deno.openKv(filename)
+
+  //       count = 0
+  //       deferred = Promise.withResolvers<void>()
+
+  //       // Register a handler that will complete quickly.
+  //       listener = db.listenQueue((_msg) => {
+  //         count += 1
+  //         if (count == 3) {
+  //           deferred.resolve()
+  //         }
+  //       })
+
+  //       // Wait for the handlers to finish.
+  //       await deferred.promise
+  //       assertEquals(3, count)
+  //       db.close()
+  //       await listener
+  //     } finally {
+  //       try {
+  //         await Deno.remove(filename)
+  //       } catch {
+  //         // pass
+  //       }
+  //     }
+  //   },
+  // })
+
+  // Deno.test({
+  //   name: 'different kv instances for enqueue and queueListen',
+  //   async fn() {
+  //     const filename = await Deno.makeTempFile({ prefix: 'queue_db' })
+  //     try {
+  //       const db0 = await Deno.openKv(filename)
+  //       const db1 = await Deno.openKv(filename)
+  //       const { promise, resolve } = Promise.withResolvers<void>()
+  //       let dequeuedMessage: unknown = null
+  //       const listener = db0.listenQueue((msg) => {
+  //         dequeuedMessage = msg
+  //         resolve()
+  //       })
+  //       try {
+  //         const res = await db1.enqueue('test')
+  //         assert(res.ok)
+  //         assertNotEquals(res.versionstamp, null)
+  //         await promise
+  //         assertEquals(dequeuedMessage, 'test')
+  //       } finally {
+  //         db0.close()
+  //         await listener
+  //         db1.close()
+  //       }
+  //     } finally {
+  //       try {
+  //         await Deno.remove(filename)
+  //       } catch {
+  //         // pass
+  //       }
+  //     }
+  //   },
+  // })
+
+  // Deno.test({
+  //   name: 'queue graceful close',
+  //   async fn() {
+  //     const db: Deno.Kv = await Deno.openKv(':memory:')
+  //     const listener = db.listenQueue((_msg) => {})
+  //     db.close()
+  //     await listener
+  //   },
+  // })
+
+  // dbTest('Invalid backoffSchedule', async (db) => {
+  //   await assertRejects(
+  //     async () => {
+  //       await db.enqueue('foo', { backoffSchedule: [1, 1, 1, 1, 1, 1] })
+  //     },
+  //     TypeError,
+  //     'Invalid backoffSchedule, max 5 intervals allowed',
+  //   )
+  //   await assertRejects(
+  //     async () => {
+  //       await db.enqueue('foo', { backoffSchedule: [3600001] })
+  //     },
+  //     TypeError,
+  //     'Invalid backoffSchedule, interval at index 0 is invalid',
+  //   )
+  // })
+
+  // dbTest('atomic operation is exposed', (db) => {
+  //   assert(Deno.AtomicOperation)
+  //   const ao = db.atomic()
+  //   assert(ao instanceof Deno.AtomicOperation)
+  // })
+
+  // Deno.test({
+  //   name: 'racy open',
+  //   async fn() {
+  //     for (let i = 0; i < 100; i++) {
+  //       const filename = await Deno.makeTempFile({ prefix: 'racy_open_db' })
+  //       try {
+  //         const [db1, db2, db3] = await Promise.all([
+  //           Deno.openKv(filename),
+  //           Deno.openKv(filename),
+  //           Deno.openKv(filename),
+  //         ])
+  //         db1.close()
+  //         db2.close()
+  //         db3.close()
+  //       } finally {
+  //         await Deno.remove(filename)
+  //       }
+  //     }
+  //   },
+  // })
+
+  // Deno.test({
+  //   name: 'racy write',
+  //   async fn() {
+  //     const filename = await Deno.makeTempFile({ prefix: 'racy_write_db' })
+  //     const concurrency = 20
+  //     const iterations = 5
+  //     try {
+  //       const dbs = await Promise.all(
+  //         Array(concurrency)
+  //           .fill(0)
+  //           .map(() => Deno.openKv(filename)),
+  //       )
+  //       try {
+  //         for (let i = 0; i < iterations; i++) {
+  //           await Promise.all(
+  //             dbs.map((db) => db.atomic().sum(['counter'], 1n).commit()),
+  //           )
+  //         }
+  //         assertEquals(
+  //           ((await dbs[0].get(['counter'])).value as Deno.KvU64).value,
+  //           BigInt(concurrency * iterations),
+  //         )
+  //       } finally {
+  //         dbs.forEach((db) => db.close())
+  //       }
+  //     } finally {
+  //       await Deno.remove(filename)
+  //     }
+  //   },
+  // })
+
+  await test('kv expiration', async () => {
+    const { mkdtemp, unlink } = await import('node:fs/promises')
+    const tempDir = await mkdtemp('kv_expiration_db')
+    const filename = path.join(tempDir, randomUUID())
+    function sleep(ms: number) {
+      return new Promise((resolve) => setTimeout(resolve, ms))
+    }
+    try {
+      await unlink(filename)
+    } catch {
+      // pass
+    }
+    let db: Valkeyrie | null = null
+
+    try {
+      db = await Valkeyrie.open(filename)
+
+      await db.set(['a'], 1, { expireIn: 1000 })
+      await db.set(['b'], 2, { expireIn: 1000 })
+      assert.deepEqual((await db.get(['a'])).value, 1)
+      assert.deepEqual((await db.get(['b'])).value, 2)
+
+      // Value overwrite should also reset expiration
+      await db.set(['b'], 2, { expireIn: 3600 * 1000 })
+
+      // Wait for expiration
+      await sleep(1000)
+
+      // Re-open to trigger immediate cleanup
+      db.close()
+      db = null
+      db = await Valkeyrie.open(filename)
+
+      let ok = false
+      for (let i = 0; i < 50; i++) {
+        await sleep(100)
+        if (
+          JSON.stringify(
+            (await db.getMany([['a'], ['b']])).map((x) => x.value),
+          ) === '[null,2]'
+        ) {
+          ok = true
+          break
+        }
+      }
+
+      if (!ok) {
+        throw new Error('Values did not expire')
+      }
+    } finally {
+      if (db) {
+        try {
+          db.close()
+        } catch {
+          // pass
+        }
+      }
+      try {
+        await unlink(filename)
+      } catch {
+        // pass
+      }
+    }
+  })
+
+  await test('kv expiration with atomic', async () => {
+    const { mkdtemp, unlink } = await import('node:fs/promises')
+    const tempDir = await mkdtemp('kv_expiration_db')
+    const filename = path.join(tempDir, randomUUID())
+    function sleep(ms: number) {
+      return new Promise((resolve) => setTimeout(resolve, ms))
+    }
+
+    try {
+      await unlink(filename)
+    } catch {
+      // pass
+    }
+    let db: Valkeyrie | null = null
+
+    try {
+      db = await Valkeyrie.open(filename)
+
+      await db
+        .atomic()
+        .set(['a'], 1, { expireIn: 1000 })
+        .set(['b'], 2, {
+          expireIn: 1000,
+        })
+        .commit()
+      assert.deepEqual(
+        (await db.getMany([['a'], ['b']])).map((x) => x.value),
+        [1, 2],
+      )
+      // Wait for expiration
+      await sleep(1000)
+
+      // Re-open to trigger immediate cleanup
+      db.close()
+      db = null
+      db = await Valkeyrie.open(filename)
+
+      let ok = false
+      for (let i = 0; i < 50; i++) {
+        await sleep(100)
+        if (
+          JSON.stringify(
+            (await db.getMany([['a'], ['b']])).map((x) => x.value),
+          ) === '[null,null]'
+        ) {
+          ok = true
+          break
+        }
+      }
+
+      if (!ok) {
+        throw new Error('Values did not expire')
+      }
+    } finally {
+      if (db) {
+        try {
+          db.close()
+        } catch {
+          // pass
+        }
+      }
+      try {
+        await unlink(filename)
+      } catch {
+        // pass
+      }
+    }
+  })
+
+  // Deno.test({
+  //   name: 'remote backend',
+  //   async fn() {
+  //     const db = await Deno.openKv('http://localhost:4545/kv_remote_authorize')
+  //     try {
+  //       await db.set(['some-key'], 1)
+  //       const entry = await db.get(['some-key'])
+  //       assertEquals(entry.value, null)
+  //       assertEquals(entry.versionstamp, null)
+  //     } finally {
+  //       db.close()
+  //     }
+  //   },
+  // })
+
+  // Deno.test({
+  //   name: 'remote backend invalid format',
+  //   async fn() {
+  //     const db = await Deno.openKv(
+  //       'http://localhost:4545/kv_remote_authorize_invalid_format',
+  //     )
+
+  //     await assertRejects(
+  //       async () => {
+  //         await db.set(['some-key'], 1)
+  //       },
+  //       Error,
+  //       'Failed to parse metadata: ',
+  //     )
+
+  //     db.close()
+  //   },
+  // })
+
+  // Deno.test({
+  //   name: 'remote backend invalid version',
+  //   async fn() {
+  //     const db = await Deno.openKv(
+  //       'http://localhost:4545/kv_remote_authorize_invalid_version',
+  //     )
+
+  //     await assertRejects(
+  //       async () => {
+  //         await db.set(['some-key'], 1)
+  //       },
+  //       Error,
+  //       'Failed to parse metadata: unsupported metadata version: 1000',
+  //     )
+
+  //     db.close()
+  //   },
+  // })
+
+  // Deno.test({
+  //   permissions: { read: true },
+  // }, async function kvExplicitResourceManagement() {
+  //   let kv2: Deno.Kv
+
+  //   {
+  //     using kv = await Deno.openKv(':memory:')
+  //     kv2 = kv
+
+  //     const res = await kv.get(['a'])
+  //     assertEquals(res.versionstamp, null)
+  //   }
+
+  //   await assertRejects(() => kv2.get(['a']), Deno.errors.BadResource)
+  // })
+
+  // Deno.test({
+  //   permissions: { read: true },
+  // }, async function kvExplicitResourceManagementManualClose() {
+  //   using kv = await Deno.openKv(':memory:')
+  //   kv.close()
+  //   await assertRejects(() => kv.get(['a']), Deno.errors.BadResource)
+  //   // calling [Symbol.dispose] after manual close is a no-op
+  // })
+
+  // dbTest('key watch', async (db) => {
+  //   const changeHistory: Deno.KvEntryMaybe<number>[] = []
+  //   const watcher: ReadableStream<Deno.KvEntryMaybe<number>[]> = db.watch<
+  //     number[]
+  //   >([['key']])
+
+  //   const reader = watcher.getReader()
+  //   const expectedChanges = 2
+
+  //   const work = (async () => {
+  //     for (let i = 0; i < expectedChanges; i++) {
+  //       const message = await reader.read()
+  //       if (message.done) {
+  //         throw new Error('Unexpected end of stream')
+  //       }
+  //       changeHistory.push(message.value[0])
+  //     }
+
+  //     await reader.cancel()
+  //   })()
+
+  //   while (changeHistory.length !== 1) {
+  //     await sleep(100)
+  //   }
+  //   assertEquals(changeHistory[0], {
+  //     key: ['key'],
+  //     value: null,
+  //     versionstamp: null,
+  //   })
+
+  //   const { versionstamp } = await db.set(['key'], 1)
+  //   while ((changeHistory.length as number) !== 2) {
+  //     await sleep(100)
+  //   }
+  //   assertEquals(changeHistory[1], {
+  //     key: ['key'],
+  //     value: 1,
+  //     versionstamp,
+  //   })
+
+  //   await work
+  //   await reader.cancel()
+  // })
+
+  // dbTest('set with key versionstamp suffix', async (db) => {
+  //   const result1 = await Array.fromAsync(db.list({ prefix: ['a'] }))
+  //   assertEquals(result1, [])
+
+  //   const setRes1 = await db.set(['a', db.commitVersionstamp()], 'b')
+  //   assert(setRes1.ok)
+  //   assert(setRes1.versionstamp > ZERO_VERSIONSTAMP)
+
+  //   const result2 = await Array.fromAsync(db.list({ prefix: ['a'] }))
+  //   assertEquals(result2.length, 1)
+  //   assertEquals(result2[0].key[1], setRes1.versionstamp)
+  //   assertEquals(result2[0].value, 'b')
+  //   assertEquals(result2[0].versionstamp, setRes1.versionstamp)
+
+  //   const setRes2 = await db
+  //     .atomic()
+  //     .set(['a', db.commitVersionstamp()], 'c')
+  //     .commit()
+  //   assert(setRes2.ok)
+  //   assert(setRes2.versionstamp > setRes1.versionstamp)
+
+  //   const result3 = await Array.fromAsync(db.list({ prefix: ['a'] }))
+  //   assertEquals(result3.length, 2)
+  //   assertEquals(result3[1].key[1], setRes2.versionstamp)
+  //   assertEquals(result3[1].value, 'c')
+  //   assertEquals(result3[1].versionstamp, setRes2.versionstamp)
+
+  //   await assertRejects(
+  //     async () => await db.set(['a', db.commitVersionstamp(), 'a'], 'x'),
+  //     TypeError,
+  //     'expected string, number, bigint, ArrayBufferView, boolean',
+  //   )
+  // })
+
+  // Deno.test({
+  //   name: 'watch should stop when db closed',
+  //   async fn() {
+  //     const db = await Deno.openKv(':memory:')
+
+  //     const watch = db.watch([['a']])
+  //     const completion = (async () => {
+  //       for await (const _item of watch) {
+  //         // pass
+  //       }
+  //     })()
+
+  //     setTimeout(() => {
+  //       db.close()
+  //     }, 100)
+
+  //     await completion
+  //   },
+  // })
 })
