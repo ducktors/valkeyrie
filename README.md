@@ -51,30 +51,6 @@ npm install valkeyrie
 yarn add valkeyrie
 ```
 
-## Building from Source
-
-Valkeyrie can be built entirely using Free/Libre and Open Source Software (FLOSS). The project requires:
-
-- Node.js (v22.14.0 or later recommended)
-- A package manager (pnpm, npm, or yarn)
-
-To build from source:
-
-```bash
-# Clone the repository
-git clone https://github.com/ducktors/valkeyrie.git
-cd valkeyrie
-
-# Install dependencies
-pnpm install
-
-# Build the project
-pnpm build
-
-# Run tests
-pnpm test
-```
-
 ## Quick Start
 
 ```typescript
@@ -149,14 +125,7 @@ For complete documentation, see [DOCUMENTATION.md](./DOCUMENTATION.md).
 
 ## Contributing
 
-We welcome contributions to Valkeyrie! Bug reports, feature requests, code contributions, and documentation improvements are all valuable to us.
-
-- **Bug Reports**: Please use the [GitHub Issues](https://github.com/ducktors/valkeyrie/issues) page to report bugs
-- **Feature Requests**: Feature requests can also be submitted through GitHub Issues
-- **Code Contributions**: Pull requests are welcome! See our contribution guidelines for more information
-- **Questions**: For questions about using Valkeyrie, please open a GitHub Discussion
-
-All documentation, bug reports, and communications are in English.
+For detailed information on how to contribute to this project, please see our [Contributing Guide](./CONTRIBUTING.md).
 
 ## Benchmarks
 
