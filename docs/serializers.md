@@ -4,14 +4,14 @@ Valkeyrie supports pluggable serializers that allow you to customize how values 
 
 ## Built-in Serializers
 
-Valkeyrie comes with two built-in serializers:
+Valkeyrie comes with three built-in serializers:
 
 ### V8 Serializer (Default)
 
 The V8 serializer uses Node.js's built-in `node:v8` module to serialize and deserialize values. This is the default serializer used by Valkeyrie.
 
-**Advantages:**
-- Supports all JavaScript data types, including complex objects, Maps, Sets, etc.
+**Features:**
+- Supports most JavaScript data types
 - Preserves object references and circular references
 - Efficient binary format
 
@@ -19,45 +19,89 @@ The V8 serializer uses Node.js's built-in `node:v8` module to serialize and dese
 - The serialized data is not human-readable
 - Not compatible with other programming languages
 - Tied to the specific V8 version
+- Unsupported types: WeakMap, WeakSet, Function, Symbol, SharedArrayBuffer
+
+**Supported Types:**
+- String
+- Number
+- Boolean
+- null
+- undefined
+- Date
+- RegExp
+- Array
+- Object
+- Map
+- Set
+- Uint8Array/ArrayBuffer
+- BigInt
+- KvU64 (Valkeyrie's 64-bit unsigned integer type)
 
 ### JSON Serializer
 
 The JSON serializer uses JSON.stringify/parse with additional handling for special types that JSON doesn't natively support.
 
-**Advantages:**
+**Features:**
 - Human-readable format
 - Compatible with other programming languages
 - Can be inspected and debugged easily
 
 **Limitations:**
-- Cannot serialize functions or symbols
-- Special handling required for types not natively supported by JSON (BigInt, Date, Map, Set, etc.)
 - Does not support circular references (will throw an error)
 - Less efficient than V8 serializer for complex objects
-- **Circular References**: The JSON serializer cannot handle circular references. If you try to store an object with circular references, it will throw an error.
-- **Unsupported Types**: Some JavaScript types are not supported by JSON, such as `Function`, `Symbol`, `WeakMap`, `WeakSet`, and `SharedArrayBuffer`. These types will be serialized as `null`.
-- **Binary Data Size**: When storing binary data (like `Uint8Array` or `ArrayBuffer`), be aware that the JSON serializer encodes this data as base64 strings, which increases the size by approximately 33%. This means that a binary value that is close to the 65KB limit might exceed the limit when serialized to JSON.
+- **Circular References**: The JSON serializer cannot handle circular references. If you try to store an object with circular 
+references, it will throw an error.
+- **Unsupported Types**: Some JavaScript types are not supported by JSON, such as `Function`, `Symbol`, `WeakMap`, `WeakSet`, 
+and `SharedArrayBuffer`. These types will be serialized as `null`.
+- **Binary Data Size**: When storing binary data (like `Uint8Array` or `ArrayBuffer`), be aware that the JSON serializer 
+encodes this data as base64 strings, which increases the size by approximately 33%. This means that a binary value that is 
+close to the 65KB limit might exceed the limit when serialized to JSON.
+- Unsupported types: Function, Symbol, WeakMap, WeakSet, SharedArrayBuffer (these will be serialized as null)
 
-## Using Serializers
+**Supported Types:**
+- String
+- Number
+- Boolean
+- null
+- Array
+- Object
+- Date
+- Map
+- Set
+- Uint8Array/ArrayBuffer
+- BigInt
+- KvU64
 
-You can specify which serializer to use when opening a Valkeyrie database:
+### BSON Serializer
 
-```typescript
-import { Valkeyrie, jsonSerializer, v8Serializer } from 'valkeyrie'
+The BSON serializer uses the MongoDB BSON format for serialization, providing an efficient binary encoding with support for a variety of data types.
 
-// Using the default V8 serializer (implicit)
-const db1 = await Valkeyrie.open('./data/default.db')
+**Features:**
+- Efficient binary encoding
+- Support for MongoDB-specific types
+- Preserves type information
 
-// Explicitly using the V8 serializer
-const db2 = await Valkeyrie.open('./data/v8.db', {
-  serializer: v8Serializer
-})
+**Limitations:**
+- Unsupported types: Function, Symbol, WeakMap, WeakSet, SharedArrayBuffer
+- The maximum serialized size is limited to 65536 bytes
+- **Circular References**: The BSON serializer cannot handle circular references. If you try to store an object with circular 
+references, it will throw an error.
 
-// Using the JSON serializer
-const db3 = await Valkeyrie.open('./data/json.db', {
-  serializer: jsonSerializer
-})
-```
+**Supported Types:**
+- String
+- Number
+- Boolean
+- null
+- undefined
+- Date
+- RegExp
+- Array
+- Object
+- Map
+- Set
+- Uint8Array/ArrayBuffer
+- BigInt
+- KvU64
 
 ## Creating Custom Serializers
 
@@ -130,9 +174,10 @@ export interface Serializer {
 ## Best Practices
 
 - Choose the serializer based on your specific needs:
-  - Use the V8 serializer for maximum performance and compatibility with all JavaScript types
+  - Use the V8 serializer for maximum performance and compatibility with most JavaScript types
   - Use the JSON serializer for human-readable storage or cross-language compatibility
+  - Use the BSON serializer for efficient binary encoding with MongoDB compatibility
   - Create a custom serializer for specialized needs (e.g., compression, encryption)
 - Be consistent with your serializer choice for a given database
 - Consider the trade-offs between storage size, performance, and compatibility
-- If you need to store objects with circular references, use the V8 serializer 
+- If you need to store objects with circular references, use the V8

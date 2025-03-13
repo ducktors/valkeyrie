@@ -36,6 +36,11 @@
       "require": "./dist/cjs/serializers/v8.js",
       "types": "./dist/esm/serializers/v8.d.ts"
     },
+    "./serializers/bson": {
+      "import": "./dist/esm/serializers/bson.js",
+      "require": "./dist/cjs/serializers/bson.js",
+      "types": "./dist/esm/serializers/bson.d.ts"
+    },
     "./package.json": "./package.json"
   },
   "author": "Maksim Sinik <maksim@sinik.it>",
@@ -105,5 +110,8 @@
       "@biomejs/biome",
       "esbuild"
     ]
+  },
+  "dependencies": {
+    "bson": "^6.10.3"
   }
 }
