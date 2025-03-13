@@ -21,6 +21,21 @@
       "require": "./dist/cjs/driver.js",
       "types": "./dist/esm/driver.d.ts"
     },
+    "./serializers": {
+      "import": "./dist/esm/serializers/serializer.js",
+      "require": "./dist/cjs/serializers/serializer.js",
+      "types": "./dist/esm/serializers/serializer.d.ts"
+    },
+    "./serializers/json": {
+      "import": "./dist/esm/serializers/json.js",
+      "require": "./dist/cjs/serializers/json.js",
+      "types": "./dist/esm/serializers/json.d.ts"
+    },
+    "./serializers/v8": {
+      "import": "./dist/esm/serializers/v8.js",
+      "require": "./dist/cjs/serializers/v8.js",
+      "types": "./dist/esm/serializers/v8.d.ts"
+    },
     "./package.json": "./package.json"
   },
   "author": "Maksim Sinik <maksim@sinik.it>",
@@ -54,7 +69,7 @@
     "prepare": "husky",
     "check-updates": "pnpm outdated --recursive --long",
     "test": "tsx --test ./test/*.ts",
-    "test:watch": "tsx --watch --test ./test/*.ts",
+    "test:watch": "tsx --watch --test \"./test/*.ts\"",
     "test:coverage": "c8 --all --src src --reporter lcov --reporter text tsx --test ./test/*.ts",
     "benchmark": "tsx ./benchmark/index.ts",
     "benchmark:basic": "tsx ./benchmark/basic.ts",

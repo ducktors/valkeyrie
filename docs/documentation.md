@@ -30,6 +30,7 @@
 - [Advanced Usage](#advanced-usage)
   - [Custom Drivers](#custom-drivers)
   - [Cleanup](#cleanup)
+  - [Serializers](#serializers)
 - [API Reference](#api-reference)
   - [Valkeyrie Class](#valkeyrie-class)
   - [Atomic Class](#atomic-class)
@@ -50,6 +51,7 @@ Key features:
 - Support for data expiration
 - High performance with minimal overhead
 - Specialized 64-bit unsigned integer type for numeric operations
+- Pluggable serializers for customizing data storage format
 
 ## Installation
 
@@ -264,7 +266,11 @@ When designing your key structure, choose key part types that best represent you
 
 ## Supported Value Types
 
-Valkeyrie supports a wide range of value types:
+Valkeyrie supports different value types depending on which serializer you use. By default, Valkeyrie uses the V8 serializer.
+
+### V8 Serializer (Default)
+
+The V8 serializer supports a wide range of value types:
 
 - Primitive types: string, number, boolean, bigint, null, undefined
 - Binary data: Uint8Array, ArrayBuffer
@@ -281,31 +287,87 @@ Unsupported types (will throw an error):
 - Error objects
 - DOM nodes
 
+### JSON Serializer
+
+The JSON serializer provides better interoperability with other systems but with some differences in how data is stored:
+
+- Primitive types: string, number, boolean, null
+- Complex types: objects, arrays
+- Special handling for:
+  - undefined (stored as a special object, restored as undefined)
+  - BigInt (stored as string representation, restored as BigInt)
+  - Uint8Array, ArrayBuffer (base64 encoded, restored to original type)
+  - Map (stored as array of key-value pairs, restored as Map)
+  - Set (stored as array of values, restored as Set)
+  - Date (stored as ISO string, restored as Date)
+  - RegExp (stored with source and flags, restored as RegExp)
+  - KvU64 (stored as string representation, restored as KvU64)
+
+Unsupported types (will throw an error):
+- Functions
+- Symbols
+- WeakMap, WeakSet
+- SharedArrayBuffer
+- Error objects
+- DOM nodes
+- Objects with circular references
+
+To use the JSON serializer:
+
+```typescript
+import { Valkeyrie, jsonSerializer } from 'valkeyrie';
+
+const db = await Valkeyrie.open('./data.db', {
+  serializer: jsonSerializer
+});
+```
+
+The JSON serializer is particularly useful when:
+- You need to inspect the database contents in a human-readable format
+- You need interoperability with other systems or languages
+- You want to ensure your data can be easily migrated or exported
+
+For detailed information about serializers, see the [Serializers documentation](./serializers.md).
+
 ### Examples for Each Value Type
 
-Here are examples of storing and retrieving different value types:
+Here are examples of storing and retrieving different value types, with notes on serializer compatibility:
 
 #### Primitive Types
 
 ```typescript
 // String
 await db.set(['primitives', 'string'], 'Hello, Valkeyrie!');
+// ✅ V8 Serializer: Preserved as string
+// ✅ JSON Serializer: Preserved as string
 
 // Number
 await db.set(['primitives', 'number'], 42);
+// ✅ V8 Serializer: Preserved as number
+// ✅ JSON Serializer: Preserved as number
 await db.set(['primitives', 'float'], 3.14159);
+// ✅ V8 Serializer: Preserved as number
+// ✅ JSON Serializer: Preserved as number
 
 // Boolean
 await db.set(['primitives', 'boolean'], true);
+// ✅ V8 Serializer: Preserved as boolean
+// ✅ JSON Serializer: Preserved as boolean
 
 // BigInt
 await db.set(['primitives', 'bigint'], 9007199254740992n);
+// ✅ V8 Serializer: Preserved as bigint
+// ✅ JSON Serializer: Stored as string representation, restored as BigInt
 
 // Null
 await db.set(['primitives', 'null'], null);
+// ✅ V8 Serializer: Preserved as null
+// ✅ JSON Serializer: Preserved as null
 
 // Undefined
 await db.set(['primitives', 'undefined'], undefined);
+// ✅ V8 Serializer: Preserved as undefined
+// ✅ JSON Serializer: Stored as special object, restored as undefined
 ```
 
 #### Binary Data
@@ -314,12 +376,16 @@ await db.set(['primitives', 'undefined'], undefined);
 // Uint8Array
 const binaryData = new Uint8Array([72, 101, 108, 108, 111]); // "Hello" in ASCII
 await db.set(['binary', 'uint8array'], binaryData);
+// ✅ V8 Serializer: Preserved as Uint8Array
+// ✅ JSON Serializer: Base64 encoded, restored as Uint8Array
 
 // ArrayBuffer
 const buffer = new ArrayBuffer(4);
 const view = new DataView(buffer);
 view.setUint32(0, 0x12345678);
 await db.set(['binary', 'arraybuffer'], buffer);
+// ✅ V8 Serializer: Preserved as ArrayBuffer
+// ✅ JSON Serializer: Base64 encoded, restored as ArrayBuffer
 ```
 
 #### Complex Types
@@ -331,9 +397,13 @@ await db.set(['complex', 'object'], {
   age: 30, 
   isActive: true 
 });
+// ✅ V8 Serializer: Preserved as object with all properties
+// ✅ JSON Serializer: Preserved as object with all properties
 
 // Array
 await db.set(['complex', 'array'], [1, 2, 3, 'four', true]);
+// ✅ V8 Serializer: Preserved as array with all elements
+// ✅ JSON Serializer: Preserved as array with all elements
 
 // Map
 const userMap = new Map();
@@ -341,10 +411,14 @@ userMap.set('id', 1);
 userMap.set('name', 'Jane Doe');
 userMap.set('roles', ['admin', 'user']);
 await db.set(['complex', 'map'], userMap);
+// ✅ V8 Serializer: Preserved as Map
+// ✅ JSON Serializer: Stored as array of key-value pairs, restored as Map
 
 // Set
 const uniqueTags = new Set(['javascript', 'typescript', 'database']);
 await db.set(['complex', 'set'], uniqueTags);
+// ✅ V8 Serializer: Preserved as Set
+// ✅ JSON Serializer: Stored as array of values, restored as Set
 ```
 
 #### Date and RegExp
@@ -352,11 +426,19 @@ await db.set(['complex', 'set'], uniqueTags);
 ```typescript
 // Date object
 await db.set(['dates', 'created'], new Date());
+// ✅ V8 Serializer: Preserved as Date object
+// ✅ JSON Serializer: Stored as ISO string, restored as Date object
 await db.set(['dates', 'specific'], new Date('2023-01-01T00:00:00Z'));
+// ✅ V8 Serializer: Preserved as Date object
+// ✅ JSON Serializer: Stored as ISO string, restored as Date object
 
 // RegExp object
 await db.set(['regex', 'email'], /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/);
+// ✅ V8 Serializer: Preserved as RegExp object
+// ✅ JSON Serializer: Stored with source and flags, restored as RegExp object
 await db.set(['regex', 'phone'], /^\+?[1-9]\d{1,14}$/);
+// ✅ V8 Serializer: Preserved as RegExp object
+// ✅ JSON Serializer: Stored with source and flags, restored as RegExp object
 ```
 
 #### KvU64 (64-bit Unsigned Integer)
@@ -367,14 +449,16 @@ import { KvU64 } from 'valkeyrie/KvU64';
 // Create and store a KvU64 value
 const counter = new KvU64(1000n);
 await db.set(['counters', 'visitors'], counter);
+// ✅ V8 Serializer: Preserved as KvU64 instance
+// ✅ JSON Serializer: Stored as string representation, restored as KvU64 instance
 
 // Retrieve and use the KvU64 value
 const result = await db.get(['counters', 'visitors']);
-console.log(result.value); // KvU64 instance
-console.log(result.value.value); // 1000n
+console.log(result.value); // KvU64 instance with both serializers
+console.log(result.value.value); // 1000n with both serializers
 ```
 
-> **Important Note**: KvU64 instances can only be used as top-level values. They cannot be nested within objects or arrays. This is a deliberate design decision to ensure efficient atomic operations on numeric values.
+> **Important Note**: KvU64 instances can only be used as top-level values. They cannot be nested within objects or arrays. This is a deliberate design decision to ensure efficient atomic operations on numeric values. This limitation applies to both serializers.
 
 ```typescript
 // ✅ CORRECT: KvU64 as a top-level value
@@ -437,24 +521,33 @@ await db.set(['users', 'user123'], {
     ['devices', ['desktop', 'mobile']]
   ])
 });
+// ✅ V8 Serializer: All types preserved as their original types
+// ✅ JSON Serializer: All types preserved, with special handling during storage:
+//    - Date objects stored as ISO strings, restored as Date objects
+//    - Set stored as array, restored as Set
+//    - BigInt values stored as strings, restored as BigInt
+//    - Uint8Array base64 encoded, restored as Uint8Array
+//    - Map stored as array of [key, value] pairs, restored as Map
 
 // For values that need atomic operations, store them separately as KvU64
 await db.set(['users', 'user123', 'posts', '1', 'views'], new KvU64(1256n));
 await db.set(['users', 'user123', 'posts', '1', 'likes'], new KvU64(42n));
 await db.set(['users', 'user123', 'loginCount'], new KvU64(37n));
+// KvU64 values work with both serializers for atomic operations
 ```
 
 #### Retrieving Complex Values
 
-When retrieving complex values, they maintain their original structure and types:
+When retrieving complex values, they maintain their original structure and types with both serializers, though the internal storage format differs:
 
 ```typescript
+// Using either V8 or JSON Serializer
 const user = await db.get(['users', 'user123']);
 console.log(user.value.profile.name); // 'Alice Johnson'
-console.log(user.value.profile.preferences.tags.has('tech')); // true
+console.log(user.value.profile.preferences.tags.has('tech')); // true (Set method works)
 console.log(user.value.posts[0].stats.views); // 1256n (regular BigInt)
 
-// For KvU64 values, retrieve them separately
+// For KvU64 values, retrieve them separately (works with both serializers)
 const views = await db.get(['users', 'user123', 'posts', '1', 'views']);
 console.log(views.value.value); // 1256n (from KvU64)
 
@@ -462,7 +555,12 @@ const loginCount = await db.get(['users', 'user123', 'loginCount']);
 console.log(loginCount.value.value); // 37n (from KvU64)
 ```
 
-Valkeyrie uses Node.js's built-in serialization to efficiently store and retrieve complex data structures while preserving their types.
+The main difference between the serializers is in how the data is stored internally:
+
+- **V8 Serializer**: Uses Node.js's built-in serialization for efficient binary storage
+- **JSON Serializer**: Uses a custom JSON-based format with type information for better interoperability
+
+Both serializers preserve the original types when retrieving values, making them largely interchangeable from an API perspective, though with different performance and compatibility characteristics.
 
 ## Working with 64-bit Unsigned Integers (KvU64)
 
@@ -740,6 +838,28 @@ Manually trigger cleanup of expired entries:
 ```typescript
 await db.cleanup();
 ```
+
+### Serializers
+
+Valkeyrie supports pluggable serializers that allow you to customize how values are stored in the database:
+
+```typescript
+import { Valkeyrie, jsonSerializer } from 'valkeyrie';
+
+// Using the JSON serializer
+const db = await Valkeyrie.open('./data.db', {
+  serializer: jsonSerializer
+});
+```
+
+Valkeyrie comes with two built-in serializers:
+
+- **V8 Serializer (Default)** - Uses Node.js's built-in `node:v8` module for efficient binary serialization
+- **JSON Serializer** - Human-readable format compatible with other programming languages
+
+You can also create custom serializers for specialized needs like compression or encryption.
+
+For detailed information about serializers, see the [Serializers documentation](./serializers.md).
 
 ## API Reference
 

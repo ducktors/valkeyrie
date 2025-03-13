@@ -1,6 +1,7 @@
 import { serialize } from 'node:v8'
 import type { Driver } from './driver.js'
 import { KvU64 } from './kv-u64.js'
+import type { Serializer } from './serializers/serializer.js'
 import { sqliteDriver } from './sqlite-driver.js'
 
 export type KeyPart = Uint8Array | string | number | bigint | boolean
@@ -67,9 +68,20 @@ export class Valkeyrie {
     this.lastVersionstamp = 0n
   }
 
-  public static async open(path?: string): Promise<Valkeyrie> {
+  /**
+   * Opens a new Valkeyrie database instance
+   * @param path Optional path to the database file (defaults to in-memory)
+   * @param options Optional configuration options
+   * @returns A new Valkeyrie instance
+   */
+  public static async open(
+    path?: string,
+    options: {
+      serializer?: () => Promise<Serializer>
+    } = {},
+  ): Promise<Valkeyrie> {
     Valkeyrie.internalConstructor = true
-    const db = new Valkeyrie(await sqliteDriver(path))
+    const db = new Valkeyrie(await sqliteDriver(path, options.serializer))
     Valkeyrie.internalConstructor = false
     await db.cleanup()
     return db
