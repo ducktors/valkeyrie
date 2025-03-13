@@ -1,5 +1,11 @@
 # valkeyrie
 
+## 0.2.1
+
+### Patch Changes
+
+- 2f50ede: Add more deno kv tests
+
 ## 0.2.0
 
 ### Minor Changes
