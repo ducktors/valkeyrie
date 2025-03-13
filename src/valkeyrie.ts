@@ -1,213 +1,10 @@
-import { DatabaseSync } from 'node:sqlite'
-import { deserialize, serialize } from 'node:v8'
+import { serialize } from 'node:v8'
+import type { Driver } from './driver.js'
 import { KvU64 } from './kv-u64.js'
+import { sqliteDriver } from './sqlite-driver.js'
 
-type PrimitveValue =
-  | undefined
-  | null
-  | boolean
-  | number
-  | string
-  | bigint
-  | Uint8Array
-  | ArrayBuffer
-  | PrimitveValue[]
-  | { [key: string]: PrimitveValue }
-  | Map<PrimitveValue, PrimitveValue>
-  | Set<PrimitveValue>
-  | Date
-  | RegExp
-export type Value = PrimitveValue | KvU64
 export type KeyPart = Uint8Array | string | number | bigint | boolean
 export type Key = KeyPart[]
-
-interface Driver {
-  close: () => Promise<void>
-  get: (keyHash: string, now: number) => Promise<DriverValue | undefined>
-  set: (
-    keyHash: string,
-    value: Value,
-    versionstamp: string,
-    expiresAt?: number,
-  ) => Promise<void>
-  delete: (keyHash: string) => Promise<void>
-  list: (
-    startHash: string,
-    endHash: string,
-    prefixHash: string,
-    now: number,
-    limit: number,
-    reverse?: boolean,
-  ) => Promise<DriverValue[]>
-  cleanup: (now: number) => Promise<void>
-  withTransaction: <T>(callback: () => Promise<T>) => Promise<T>
-}
-
-export function defineDriver(
-  initDriver: ((path?: string) => Promise<Driver>) | Driver,
-): (path?: string) => Promise<Driver> {
-  if (initDriver instanceof Function) {
-    return initDriver
-  }
-
-  return async () => initDriver
-}
-
-interface DriverValue {
-  keyHash: string
-  value: Value
-  versionstamp: string
-}
-type SqlTable = Pick<DriverValue, 'versionstamp'> & {
-  key_hash: string
-  value: Buffer
-  is_u64: number
-}
-
-const sqliteDriver = defineDriver(async (path = ':memory:') => {
-  const db = new DatabaseSync(path)
-  // Enable WAL mode for better performance
-  db.exec('PRAGMA journal_mode = WAL')
-
-  // Create the KV table with versioning and expiry support
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS kv_store (
-      key_hash TEXT PRIMARY KEY,
-      value BLOB,
-      versionstamp TEXT NOT NULL,
-      expires_at INTEGER,
-      is_u64 INTEGER DEFAULT 0
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_kv_store_expires_at
-    ON kv_store(expires_at)
-    WHERE expires_at IS NOT NULL;
-
-    CREATE INDEX IF NOT EXISTS idx_kv_store_key_hash
-    ON kv_store(key_hash);
-  `)
-
-  const statements = {
-    get: db.prepare(
-      'SELECT key_hash, value, versionstamp, is_u64 FROM kv_store WHERE key_hash = ? AND (expires_at IS NULL OR expires_at > ?)',
-    ),
-    set: db.prepare(
-      'INSERT OR REPLACE INTO kv_store (key_hash, value, versionstamp, is_u64) VALUES (?, ?, ?, ?)',
-    ),
-    setWithExpiry: db.prepare(
-      'INSERT OR REPLACE INTO kv_store (key_hash, value, versionstamp, expires_at, is_u64) VALUES (?, ?, ?, ?, ?)',
-    ),
-    delete: db.prepare('DELETE FROM kv_store WHERE key_hash = ?'),
-    list: db.prepare(
-      'SELECT key_hash, value, versionstamp, is_u64 FROM kv_store WHERE key_hash >= ? AND key_hash < ? AND key_hash != ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key_hash ASC LIMIT ?',
-    ),
-    listReverse: db.prepare(
-      'SELECT key_hash, value, versionstamp, is_u64 FROM kv_store WHERE key_hash >= ? AND key_hash < ? AND key_hash != ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key_hash DESC LIMIT ?',
-    ),
-    cleanup: db.prepare('DELETE FROM kv_store WHERE expires_at <= ?'),
-  }
-
-  function serializeValue(value: Value): { serialized: Buffer; isU64: number } {
-    const isU64 = value instanceof KvU64 ? 1 : 0
-    const serialized = serialize(isU64 ? (value as KvU64).value : value)
-
-    if (serialized.length > 65536 + 7) {
-      throw new TypeError('Value too large (max 65536 bytes)')
-    }
-    return {
-      serialized,
-      isU64,
-    }
-  }
-
-  function deserializeValue(value: Buffer, isU64: number): Value {
-    const deserialized = deserialize(value)
-    if (isU64) {
-      return new KvU64(deserialized)
-    }
-    return deserialized
-  }
-
-  return {
-    close: async () => {
-      db.close()
-    },
-    get: async (keyHash: string, now: number) => {
-      const result = (await statements.get.get(keyHash, now)) as
-        | SqlTable
-        | undefined
-      if (!result) {
-        return undefined
-      }
-      return {
-        keyHash: result.key_hash,
-        value: deserializeValue(result.value, result.is_u64),
-        versionstamp: result.versionstamp,
-      }
-    },
-    set: async (key, value, versionstamp, expiresAt) => {
-      const { serialized, isU64 } = serializeValue(value)
-      if (expiresAt) {
-        statements.setWithExpiry.run(
-          key,
-          serialized,
-          versionstamp,
-          expiresAt,
-          isU64,
-        )
-      } else {
-        statements.set.run(key, serialized, versionstamp, isU64)
-      }
-    },
-    delete: async (keyHash) => {
-      statements.delete.run(keyHash)
-    },
-    list: async (
-      startHash,
-      endHash,
-      prefixHash,
-      now,
-      limit,
-      reverse = false,
-    ) => {
-      return (
-        (reverse
-          ? statements.listReverse.all(
-              startHash,
-              endHash,
-              prefixHash,
-              now,
-              limit,
-            )
-          : statements.list.all(
-              startHash,
-              endHash,
-              prefixHash,
-              now,
-              limit,
-            )) as SqlTable[]
-      ).map((r) => ({
-        keyHash: r.key_hash,
-        value: deserializeValue(r.value, r.is_u64),
-        versionstamp: r.versionstamp,
-      }))
-    },
-    cleanup: async (now) => {
-      statements.cleanup.run(now)
-    },
-    withTransaction: async <T>(callback: () => Promise<T>): Promise<T> => {
-      db.exec('BEGIN TRANSACTION')
-      try {
-        const result = await callback()
-        db.exec('COMMIT')
-        return result
-      } catch (error) {
-        db.exec('ROLLBACK')
-        throw error
-      }
-    },
-  }
-})
 
 interface AtomicCheck {
   key: Key
@@ -236,8 +33,8 @@ export interface Check {
   versionstamp: string | null
 }
 
-export type Mutation = { key: Key } & (
-  | { type: 'set'; value: Value; expireIn?: number }
+export type Mutation<T = unknown> = { key: Key } & (
+  | { type: 'set'; value: T; expireIn?: number }
   | { type: 'delete' }
   | { type: 'sum'; value: KvU64 }
   | { type: 'max'; value: KvU64 }
@@ -329,15 +126,13 @@ export class Valkeyrie {
    * - Boolean: 0x05 + single byte + 0x00
    *
    * After converting each part, they are concatenated with a null byte delimiter to form the full key.
-   * The full key is then converted to a base64 string and any trailing '=' characters are removed.
    * This method ensures that keys are consistently formatted and can be reliably hashed for storage and retrieval.
-   *
    * Note that key ordering is determined by a lexicographical comparison of their parts, with the first part being the most significant and the last part being the least significant. Additionally, key comparisons are case sensitive.
    *
    * @param {Key} key - The key to be hashed.
-   * @returns {string} - The base64 string representation of the hashed key.
+   * @returns {Buffer} - The buffer representation of the hashed key.
    */
-  private hashKey(key: Key): string {
+  private keyToBuffer(key: Key): Uint8Array {
     const parts = key.map((part) => {
       let bytes: Buffer
 
@@ -377,7 +172,7 @@ export class Valkeyrie {
         throw new Error(`Unsupported key part type: ${typeof part}`)
       }
 
-      return bytes
+      return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
     })
 
     // Join all parts with a null byte delimiter
@@ -385,7 +180,29 @@ export class Valkeyrie {
     if (fullKey.length > 2048) {
       throw new TypeError('Key too large for write (max 2048 bytes)')
     }
-    return fullKey.toString('base64').replace(/=+$/, '')
+    return fullKey
+  }
+
+  /**
+   * Hashes a key.
+   *
+   * @param {Key} key - The key to hash.
+   * @returns {string} - The hex string representation of the hashed key.
+   */
+  private hashKey(key: Key): string {
+    return Buffer.from(this.keyToBuffer(key)).toString('hex')
+  }
+
+  /**
+   * Hashes a key and returns a base64-encoded string.
+   *
+   * @param {Key} key - The key to get the cursor from.
+   * @returns {string} - The base64 string representation of the hashed key.
+   */
+  private getCursorFromKey(key: Key): string {
+    return Buffer.from(this.keyToBuffer(key))
+      .toString('base64')
+      .replace(/=+$/, '')
   }
 
   /**
@@ -403,9 +220,7 @@ export class Valkeyrie {
    * @throws {Error} If the hash format is invalid or contains an unknown type marker
    */
   private decodeKeyHash(hash: string): Key {
-    // Add back padding if needed
-    const padding = '='.repeat((4 - (hash.length % 4)) % 4)
-    const buffer = Buffer.from(hash + padding, 'base64')
+    const buffer = Buffer.from(hash, 'hex')
     const parts: KeyPart[] = []
     let pos = 0
 
@@ -532,7 +347,7 @@ export class Valkeyrie {
     return Promise.all(keys.map((key) => this.get(key)))
   }
 
-  async set<T extends Value>(
+  async set<T = unknown>(
     key: Key,
     value: T,
     options: SetOptions = {},
@@ -855,7 +670,7 @@ export class Valkeyrie {
         if (!lastKey) return ''
         const lastPart = lastKey[lastKey.length - 1]
         if (!lastPart) return ''
-        return self.hashKey([lastPart])
+        return self.getCursorFromKey([lastPart])
       },
     }
 
@@ -1069,7 +884,7 @@ class Atomic {
     return this
   }
 
-  set(key: Key, value: Value, options: SetOptions = {}): Atomic {
+  set<T = unknown>(key: Key, value: T, options: SetOptions = {}): Atomic {
     return this.mutate({
       type: 'set',
       key,

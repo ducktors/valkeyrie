@@ -1,7 +1,10 @@
 import assert, { AssertionError } from 'node:assert'
 import { randomUUID } from 'node:crypto'
-import path from 'node:path'
+import { unlink } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, test } from 'node:test'
+import { setTimeout } from 'node:timers/promises'
 import { inspect } from 'node:util'
 import { KvU64 } from '../src/kv-u64.js'
 import { type Key, type Mutation, Valkeyrie } from '../src/valkeyrie.js'
@@ -2088,17 +2091,7 @@ describe('test', async () => {
   // })
 
   await test('kv expiration', async () => {
-    const { mkdtemp, unlink } = await import('node:fs/promises')
-    const tempDir = await mkdtemp('kv_expiration_db')
-    const filename = path.join(tempDir, randomUUID())
-    function sleep(ms: number) {
-      return new Promise((resolve) => setTimeout(resolve, ms))
-    }
-    try {
-      await unlink(filename)
-    } catch {
-      // pass
-    }
+    const filename = join(tmpdir(), randomUUID())
     let db: Valkeyrie | null = null
 
     try {
@@ -2113,7 +2106,7 @@ describe('test', async () => {
       await db.set(['b'], 2, { expireIn: 3600 * 1000 })
 
       // Wait for expiration
-      await sleep(1000)
+      await setTimeout(1000)
 
       // Re-open to trigger immediate cleanup
       db.close()
@@ -2122,7 +2115,7 @@ describe('test', async () => {
 
       let ok = false
       for (let i = 0; i < 50; i++) {
-        await sleep(100)
+        await setTimeout(100)
         if (
           JSON.stringify(
             (await db.getMany([['a'], ['b']])).map((x) => x.value),
@@ -2153,18 +2146,7 @@ describe('test', async () => {
   })
 
   await test('kv expiration with atomic', async () => {
-    const { mkdtemp, unlink } = await import('node:fs/promises')
-    const tempDir = await mkdtemp('kv_expiration_db')
-    const filename = path.join(tempDir, randomUUID())
-    function sleep(ms: number) {
-      return new Promise((resolve) => setTimeout(resolve, ms))
-    }
-
-    try {
-      await unlink(filename)
-    } catch {
-      // pass
-    }
+    const filename = join(tmpdir(), randomUUID())
     let db: Valkeyrie | null = null
 
     try {
@@ -2182,7 +2164,7 @@ describe('test', async () => {
         [1, 2],
       )
       // Wait for expiration
-      await sleep(1000)
+      await setTimeout(1000)
 
       // Re-open to trigger immediate cleanup
       db.close()
@@ -2191,7 +2173,7 @@ describe('test', async () => {
 
       let ok = false
       for (let i = 0; i < 50; i++) {
-        await sleep(100)
+        await setTimeout(100)
         if (
           JSON.stringify(
             (await db.getMany([['a'], ['b']])).map((x) => x.value),
