@@ -1,3 +1,5 @@
+import type { Serializer } from './serializers/serializer.js'
+
 export interface Driver {
   close: () => Promise<void>
   get: (keyHash: string, now: number) => Promise<DriverValue | undefined>
@@ -21,8 +23,16 @@ export interface Driver {
 }
 
 export function defineDriver(
-  initDriver: ((path?: string) => Promise<Driver>) | Driver,
-): (path?: string) => Promise<Driver> {
+  initDriver:
+    | ((
+        path?: string,
+        serializerInit?: () => Promise<Serializer>,
+      ) => Promise<Driver>)
+    | Driver,
+): (
+  path?: string,
+  serializerInit?: () => Promise<Serializer>,
+) => Promise<Driver> {
   if (initDriver instanceof Function) {
     return initDriver
   }

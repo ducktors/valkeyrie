@@ -22,6 +22,7 @@ This is a work in progress, but the API and everything already implemented is st
   - [Hierarchical Keys](#hierarchical-keys)
   - [Value Types](#value-types)
   - [Atomic Operations](#atomic-operations)
+  - [Serializers](#serializers)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
 - [Benchmarks](#benchmarks)
@@ -119,9 +120,28 @@ await db.atomic()
   .commit();
 ```
 
+### Serializers
+
+Valkeyrie supports pluggable serializers that allow you to customize how values are stored in the database:
+
+- **V8 Serializer (Default)** - Uses Node.js's built-in `node:v8` module for efficient binary serialization
+- **JSON Serializer** - Human-readable format compatible with other programming languages
+- **Custom Serializers** - Create your own serializers for specialized needs like compression or encryption
+
+```typescript
+import { Valkeyrie, jsonSerializer } from 'valkeyrie';
+
+// Using the JSON serializer
+const db = await Valkeyrie.open('./data.db', {
+  serializer: jsonSerializer
+});
+```
+
+For detailed information about serializers, see the [Serializers documentation](./docs/serializers.md).
+
 ## Documentation
 
-For complete documentation, see [Documentation](./DOCUMENTATION.md).
+For complete documentation, see [Documentation](./docs/documentation.md).
 
 ## Contributing
 

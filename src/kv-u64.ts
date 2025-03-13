@@ -26,10 +26,6 @@ export class KvU64 {
     return this.value.toString()
   }
 
-  toJSON(): string {
-    return this.value.toString()
-  }
-
   [Symbol.for('nodejs.util.inspect.custom')](): string {
     return `[KvU64: ${this.value}n]`
   }
