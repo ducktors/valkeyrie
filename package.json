@@ -16,6 +16,11 @@
       "require": "./dist/cjs/kv-u64.js",
       "types": "./dist/esm/kv-u64.d.ts"
     },
+    "./driver": {
+      "import": "./dist/esm/driver.js",
+      "require": "./dist/cjs/driver.js",
+      "types": "./dist/esm/driver.d.ts"
+    },
     "./package.json": "./package.json"
   },
   "author": "Maksim Sinik <maksim@sinik.it>",
