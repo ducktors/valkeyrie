@@ -1,5 +1,13 @@
 # valkeyrie
 
+## 0.2.2
+
+### Patch Changes
+
+- c2f03d6: chore: add json serializer
+- efc2b66: chore: add tests for bson serializer
+- f8d6235: feat: add bson serializer
+
 ## 0.2.1
 
 ### Patch Changes
