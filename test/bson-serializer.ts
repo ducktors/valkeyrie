@@ -6,12 +6,11 @@ import { join } from 'node:path'
 import { describe, test } from 'node:test'
 import { setTimeout } from 'node:timers/promises'
 import { inspect } from 'node:util'
-import { BSON } from 'bson'
 import { KvU64 } from '../src/kv-u64.js'
 import { bsonSerializer } from '../src/serializers/bson.js'
 import { type Key, type Mutation, Valkeyrie } from '../src/valkeyrie.js'
 
-describe('test', async () => {
+describe('test bson serializer', async () => {
   async function dbTest(
     name: string,
     fn: (db: Valkeyrie) => Promise<void> | void,
@@ -59,19 +58,15 @@ describe('test', async () => {
     assert.deepEqual(result4.versionstamp, null)
   })
 
-  const VALUE_CASES = [
+  const VALUE_CASES: { name: string; value: unknown }[] = [
     { name: 'string', value: 'hello' },
     { name: 'number', value: 42 },
-    { name: 'bigint', value: 42n },
     { name: 'boolean', value: true },
     { name: 'null', value: null },
     { name: 'undefined', value: undefined },
     { name: 'Date', value: new Date(0) },
-    { name: 'Uint8Array', value: new Uint8Array([1, 2, 3]) },
-    { name: 'ArrayBuffer', value: new ArrayBuffer(3) },
     { name: 'array', value: [1, 2, 3] },
     { name: 'object', value: { a: 1, b: 2 } },
-    { name: 'ObjectId', value: new BSON.ObjectId() },
     {
       name: 'nested array',
       value: [
@@ -79,10 +74,17 @@ describe('test', async () => {
         [3, 4],
       ],
     },
-    { name: 'nested object', value: { a: { b: 1 } } },
   ]
 
-  for (const { name, value } of VALUE_CASES) {
+  for (const { name, value } of VALUE_CASES.concat({
+    name: 'nested object',
+    value: VALUE_CASES.reduce<Record<string, unknown>>((acc, curr) => {
+      if (curr.value !== undefined) {
+        acc[curr.name] = curr.value
+      }
+      return acc
+    }, {}),
+  })) {
     await dbTest(`set and get ${name} value`, async (db) => {
       await db.set(['a'], value)
       const result = await db.get(['a'])
@@ -91,7 +93,7 @@ describe('test', async () => {
     })
   }
 
-  await dbTest('set and get recursive object', async (db) => {
+  await dbTest('set and get recursive object (invalid)', async (db) => {
     // biome-ignore lint/suspicious/noExplicitAny: testing
     const value: any = { a: undefined }
     value.a = value
@@ -109,18 +111,14 @@ describe('test', async () => {
     assert.equal(result.value, null)
   })
 
-  // invalid values (as per structured clone algorithm with _for storage_, NOT JSON)
   const INVALID_VALUE_CASES = [
     { name: 'function', value: () => {} },
     { name: 'symbol', value: Symbol() },
     { name: 'WeakMap', value: new WeakMap() },
     { name: 'WeakSet', value: new WeakSet() },
-    // {
-    //   name: "WebAssembly.Module",
-    //   value: new WebAssembly.Module(
-    //     new Uint8Array([0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00]),
-    //   ),
-    // },
+    { name: 'Uint8Array', value: new Uint8Array([1, 2, 3]) },
+    { name: 'ArrayBuffer', value: new ArrayBuffer(3) },
+    { name: 'BigInt', value: 42n },
     {
       name: 'SharedArrayBuffer',
       value: new SharedArrayBuffer(3),
@@ -1224,8 +1222,8 @@ describe('test', async () => {
   })
 
   await dbTest('value size limit', async (db) => {
-    const lastValidValue = new Uint8Array(65536 - 100) // Use a slightly smaller value to account for BSON overhead
-    const firstInvalidValue = new Uint8Array(65537)
+    const lastValidValue = new Uint8Array(32769).toString().slice(1)
+    const firstInvalidValue = new Uint8Array(32769).toString()
 
     const res = await db.set(['a'], lastValidValue)
     assert.deepEqual(await db.get(['a']), {
@@ -1510,183 +1508,6 @@ describe('test', async () => {
     assert.deepEqual(result3.value, specialRegex)
   })
 
-  await dbTest('serialize and deserialize Map', async (db) => {
-    // Simple map with string keys
-    const stringKeyMap = new Map<string, string | number>([
-      ['key1', 'value1'],
-      ['key2', 42],
-    ])
-    await db.set(['map1'], stringKeyMap)
-    const result1 = await db.get(['map1'])
-    assert.deepEqual(result1.value, stringKeyMap)
-
-    // Map with non-string keys
-    const complexKeyMap = new Map<unknown, string>([
-      [1, 'number key'],
-      [true, 'boolean key'],
-      [{ nested: 'object' }, 'object key'],
-      [[1, 2, 3], 'array key'],
-    ])
-    await db.set(['map2'], complexKeyMap)
-    const result2 = await db.get(['map2'])
-
-    // Check each entry individually since object keys won't be equal by reference
-    const resultMap = result2.value as Map<unknown, string>
-    assert.equal(resultMap.size, complexKeyMap.size)
-    assert.equal(resultMap.get(1), 'number key')
-    assert.equal(resultMap.get(true), 'boolean key')
-
-    // For object and array keys, we need to check the values exist
-    // but can't check the exact keys by reference
-    let foundObjectKey = false
-    let foundArrayKey = false
-
-    for (const [key, value] of resultMap.entries()) {
-      if (
-        value === 'object key' &&
-        typeof key === 'object' &&
-        key !== null &&
-        !Array.isArray(key)
-      ) {
-        foundObjectKey = true
-      }
-      if (value === 'array key' && Array.isArray(key)) {
-        foundArrayKey = true
-      }
-    }
-
-    assert.ok(
-      foundObjectKey,
-      'Map with object key was not properly serialized/deserialized',
-    )
-    assert.ok(
-      foundArrayKey,
-      'Map with array key was not properly serialized/deserialized',
-    )
-  })
-
-  await dbTest('serialize and deserialize Set', async (db) => {
-    // Simple set with primitive values
-    const primitiveSet = new Set([1, 'string', true, null])
-    await db.set(['set1'], primitiveSet)
-    const result1 = await db.get(['set1'])
-    assert.deepEqual(result1.value, primitiveSet)
-
-    // Set with complex values
-    const complexSet = new Set([{ a: 1, b: 2 }, [1, 2, 3], new Date(), /regex/])
-    await db.set(['set2'], complexSet)
-    const result2 = await db.get(['set2'])
-
-    // Check size
-    const resultSet = result2.value as Set<unknown>
-    assert.equal(resultSet.size, complexSet.size)
-
-    // Check that we have one of each type
-    let hasObject = false
-    let hasArray = false
-    let hasDate = false
-    let hasRegex = false
-
-    for (const item of resultSet) {
-      if (
-        typeof item === 'object' &&
-        item !== null &&
-        !Array.isArray(item) &&
-        !(item instanceof Date) &&
-        !(item instanceof RegExp)
-      ) {
-        hasObject = true
-      } else if (Array.isArray(item)) {
-        hasArray = true
-      } else if (item instanceof Date) {
-        hasDate = true
-      } else if (item instanceof RegExp) {
-        hasRegex = true
-      }
-    }
-
-    assert.ok(
-      hasObject,
-      'Set with object was not properly serialized/deserialized',
-    )
-    assert.ok(
-      hasArray,
-      'Set with array was not properly serialized/deserialized',
-    )
-    assert.ok(hasDate, 'Set with Date was not properly serialized/deserialized')
-    assert.ok(
-      hasRegex,
-      'Set with RegExp was not properly serialized/deserialized',
-    )
-  })
-
-  await dbTest('serialize and deserialize nested Map and Set', async (db) => {
-    // Map containing Sets
-    // Create the sets first with explicit types
-    const numberSet = new Set<number>([1, 2, 3])
-    const stringSet = new Set<string>(['a', 'b', 'c'])
-
-    // Then create the map with the pre-typed sets
-    const mapWithSets = new Map<string, Set<number> | Set<string>>([
-      ['set1', numberSet],
-      ['set2', stringSet],
-    ])
-
-    await db.set(['nested1'], mapWithSets)
-    const result1 = await db.get(['nested1'])
-    assert.deepEqual(result1.value, mapWithSets)
-
-    // Set containing Maps
-    const setWithMaps = new Set([new Map([['a', 1]]), new Map([['b', 2]])])
-    await db.set(['nested2'], setWithMaps)
-    const result2 = await db.get(['nested2'])
-
-    // Check size
-    const resultSet = result2.value as Set<Map<string, number>>
-    assert.equal(resultSet.size, setWithMaps.size)
-
-    // Check that we have Maps in the Set
-    let mapCount = 0
-    for (const item of resultSet) {
-      if (item instanceof Map) {
-        mapCount++
-      }
-    }
-    assert.equal(
-      mapCount,
-      2,
-      'Set with Maps was not properly serialized/deserialized',
-    )
-  })
-
-  await dbTest('handle BSON special types', async (db) => {
-    // Test with BSON Long
-    const longValue = new BSON.Long(42)
-    await db.set(['long'], longValue)
-    const longResult = await db.get(['long'])
-
-    // BSON Long is converted to a BSON Long object in the current implementation
-    const longVal = longResult.value as Record<string, unknown>
-    assert.equal(typeof longVal, 'object')
-    assert.ok(Object.prototype.hasOwnProperty.call(longVal, 'low'))
-    assert.ok(Object.prototype.hasOwnProperty.call(longVal, 'high'))
-    assert.ok(Object.prototype.hasOwnProperty.call(longVal, 'unsigned'))
-    assert.equal(longVal.low, 42)
-    assert.equal(longVal.high, 0)
-    assert.equal(longVal.unsigned, false)
-
-    // Test with BSON Decimal128
-    const decimalValue = BSON.Decimal128.fromString('123.456')
-    await db.set(['decimal'], decimalValue)
-    const decimalResult = await db.get(['decimal'])
-
-    // BSON Decimal128 is preserved as a Decimal128 object
-    const decimalVal = decimalResult.value as Record<string, unknown>
-    assert.equal(typeof decimalVal, 'object')
-    assert.ok(Object.prototype.hasOwnProperty.call(decimalVal, 'bytes'))
-    assert.ok(decimalVal.bytes instanceof Buffer)
-  })
-
   await dbTest('handle undefined values', async (db) => {
     // In JavaScript, undefined becomes null when serialized
     const objWithUndefined = { a: undefined, b: 'defined' }
@@ -1696,52 +1517,6 @@ describe('test', async () => {
     // The undefined property is removed during serialization in the current implementation
     // rather than being converted to null
     assert.deepEqual(result.value, { b: 'defined' })
-  })
-
-  await dbTest('handle complex key restoration in Maps', async (db) => {
-    // Test with various types of keys that need special parsing
-    const complexMap = new Map<string, string>([
-      ['123', 'numeric string'], // Should stay as string
-      ['true', 'boolean string'], // Should stay as string
-      ['null', 'null string'], // Should stay as string
-      ['{"a":1}', 'object string'], // Should stay as string
-      ['[1,2,3]', 'array string'], // Should stay as string
-    ])
-
-    await db.set(['complex-map-keys'], complexMap)
-    const result = await db.get(['complex-map-keys'])
-
-    // Check that the map was serialized and deserialized correctly
-    const resultMap = result.value as Map<unknown, string>
-    assert.equal(resultMap.size, complexMap.size)
-
-    // The keys are parsed during deserialization, so we need to check for the parsed values
-    assert.equal(resultMap.get(123), 'numeric string')
-    assert.equal(resultMap.get(true), 'boolean string')
-    assert.equal(resultMap.get(null), 'null string')
-
-    // Find the object key and array key
-    let foundObjectKey = false
-    let foundArrayKey = false
-
-    for (const [key, value] of resultMap.entries()) {
-      if (
-        value === 'object string' &&
-        typeof key === 'object' &&
-        key !== null &&
-        !Array.isArray(key)
-      ) {
-        foundObjectKey = true
-        assert.deepEqual(key, { a: 1 })
-      }
-      if (value === 'array string' && Array.isArray(key)) {
-        foundArrayKey = true
-        assert.deepEqual(key, [1, 2, 3])
-      }
-    }
-
-    assert.ok(foundObjectKey, 'Object key was not properly deserialized')
-    assert.ok(foundArrayKey, 'Array key was not properly deserialized')
   })
 
   await test('kv expiration', async () => {

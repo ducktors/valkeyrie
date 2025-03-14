@@ -77,7 +77,7 @@ export class Valkeyrie {
   public static async open(
     path?: string,
     options: {
-      serializer?: () => Promise<Serializer>
+      serializer?: () => Serializer
     } = {},
   ): Promise<Valkeyrie> {
     Valkeyrie.internalConstructor = true

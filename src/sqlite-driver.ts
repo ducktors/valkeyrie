@@ -10,7 +10,7 @@ type SqlTable = Pick<DriverValue, 'versionstamp'> & {
 }
 
 export const sqliteDriver = defineDriver(
-  async (path = ':memory:', customSerializer?: () => Promise<Serializer>) => {
+  async (path = ':memory:', customSerializer?: () => Serializer) => {
     const db = new DatabaseSync(path)
     // Enable WAL mode for better performance
     db.exec('PRAGMA journal_mode = WAL')
@@ -21,8 +21,7 @@ export const sqliteDriver = defineDriver(
       key_hash TEXT PRIMARY KEY,
       value BLOB,
       versionstamp TEXT NOT NULL,
-      expires_at INTEGER,
-      is_u64 INTEGER DEFAULT 0
+      expires_at INTEGER
     );
 
     CREATE INDEX IF NOT EXISTS idx_kv_store_expires_at
@@ -35,20 +34,20 @@ export const sqliteDriver = defineDriver(
 
     const statements = {
       get: db.prepare(
-        'SELECT key_hash, value, versionstamp, is_u64 FROM kv_store WHERE key_hash = ? AND (expires_at IS NULL OR expires_at > ?)',
+        'SELECT key_hash, value, versionstamp FROM kv_store WHERE key_hash = ? AND (expires_at IS NULL OR expires_at > ?)',
       ),
       set: db.prepare(
-        'INSERT OR REPLACE INTO kv_store (key_hash, value, versionstamp, is_u64) VALUES (?, ?, ?, ?)',
+        'INSERT OR REPLACE INTO kv_store (key_hash, value, versionstamp) VALUES (?, ?, ?)',
       ),
       setWithExpiry: db.prepare(
-        'INSERT OR REPLACE INTO kv_store (key_hash, value, versionstamp, expires_at, is_u64) VALUES (?, ?, ?, ?, ?)',
+        'INSERT OR REPLACE INTO kv_store (key_hash, value, versionstamp, expires_at) VALUES (?, ?, ?, ?)',
       ),
       delete: db.prepare('DELETE FROM kv_store WHERE key_hash = ?'),
       list: db.prepare(
-        'SELECT key_hash, value, versionstamp, is_u64 FROM kv_store WHERE key_hash >= ? AND key_hash < ? AND key_hash != ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key_hash ASC LIMIT ?',
+        'SELECT key_hash, value, versionstamp FROM kv_store WHERE key_hash >= ? AND key_hash < ? AND key_hash != ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key_hash ASC LIMIT ?',
       ),
       listReverse: db.prepare(
-        'SELECT key_hash, value, versionstamp, is_u64 FROM kv_store WHERE key_hash >= ? AND key_hash < ? AND key_hash != ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key_hash DESC LIMIT ?',
+        'SELECT key_hash, value, versionstamp FROM kv_store WHERE key_hash >= ? AND key_hash < ? AND key_hash != ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key_hash DESC LIMIT ?',
       ),
       cleanup: db.prepare('DELETE FROM kv_store WHERE expires_at <= ?'),
     }
@@ -71,22 +70,16 @@ export const sqliteDriver = defineDriver(
         }
         return {
           keyHash: result.key_hash,
-          value: serializer.deserialize(result.value, result.is_u64),
+          value: serializer.deserialize(result.value),
           versionstamp: result.versionstamp,
         }
       },
       set: async (key, value, versionstamp, expiresAt) => {
-        const { serialized, isU64 } = serializer.serialize(value)
+        const serialized = serializer.serialize(value)
         if (expiresAt) {
-          statements.setWithExpiry.run(
-            key,
-            serialized,
-            versionstamp,
-            expiresAt,
-            isU64,
-          )
+          statements.setWithExpiry.run(key, serialized, versionstamp, expiresAt)
         } else {
-          statements.set.run(key, serialized, versionstamp, isU64)
+          statements.set.run(key, serialized, versionstamp)
         }
       },
       delete: async (keyHash) => {
@@ -118,7 +111,7 @@ export const sqliteDriver = defineDriver(
               )) as SqlTable[]
         ).map((r) => ({
           keyHash: r.key_hash,
-          value: serializer.deserialize(r.value, r.is_u64),
+          value: serializer.deserialize(r.value),
           versionstamp: r.versionstamp,
         }))
       },

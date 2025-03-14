@@ -4,7 +4,7 @@ export interface Serializer {
    * @param value The value to serialize
    * @returns A tuple containing the serialized value and a flag indicating if it's a KvU64
    */
-  serialize: (value: unknown) => { serialized: Uint8Array; isU64: number }
+  serialize: (value: unknown) => Uint8Array
 
   /**
    * Deserializes a binary value back to its original form
@@ -12,7 +12,7 @@ export interface Serializer {
    * @param isU64 Flag indicating if the value is a KvU64
    * @returns The deserialized value
    */
-  deserialize: (value: Uint8Array, isU64: number) => unknown
+  deserialize: (value: Uint8Array) => unknown
 }
 
 /**
@@ -21,11 +21,11 @@ export interface Serializer {
  * @returns A function that returns a Promise resolving to a Serializer
  */
 export function defineSerializer(
-  initSerializer: (() => Promise<Serializer>) | Serializer,
-): () => Promise<Serializer> {
+  initSerializer: (() => Serializer) | Serializer,
+): () => Serializer {
   if (initSerializer instanceof Function) {
     return initSerializer
   }
 
-  return async () => initSerializer
+  return () => initSerializer
 }
