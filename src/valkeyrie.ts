@@ -77,7 +77,7 @@ export class Valkeyrie {
   public static async open(
     path?: string,
     options: {
-      serializer?: () => Promise<Serializer>
+      serializer?: () => Serializer
     } = {},
   ): Promise<Valkeyrie> {
     Valkeyrie.internalConstructor = true
@@ -425,8 +425,13 @@ export class Valkeyrie {
     let currentStartHash = startHash
     let currentEndHash = endHash
 
-    while (remainingLimit > 0) {
-      const currentBatchSize = Math.min(batchSize, remainingLimit)
+    // Continue fetching as long as we have a limit remaining or limit is Infinity
+    while (remainingLimit > 0 || limit === Number.POSITIVE_INFINITY) {
+      // If limit is Infinity, use batchSize, otherwise use the minimum of batchSize and remainingLimit
+      const currentBatchSize =
+        limit === Number.POSITIVE_INFINITY
+          ? batchSize
+          : Math.min(batchSize, remainingLimit)
       const results = await this.driver.list(
         currentStartHash,
         currentEndHash,
@@ -446,7 +451,11 @@ export class Valkeyrie {
       }
 
       if (results.length < currentBatchSize) break
-      remainingLimit -= results.length
+
+      // Only decrement remainingLimit if it's not Infinity
+      if (limit !== Number.POSITIVE_INFINITY) {
+        remainingLimit -= results.length
+      }
 
       // Update hash bounds for next batch
       const lastResult = results[results.length - 1]
@@ -620,7 +629,12 @@ export class Valkeyrie {
   ): AsyncIterableIterator<Entry<T>> & { readonly cursor: string } {
     this.validateSelector(selector)
 
-    const { limit = 500, reverse = false, batchSize = 500, cursor } = options
+    const {
+      limit = Number.POSITIVE_INFINITY,
+      reverse = false,
+      batchSize = 500,
+      cursor,
+    } = options
     let bounds: { startHash: string; endHash: string; prefixHash: string }
 
     if (this.isRangeSelector(selector)) {

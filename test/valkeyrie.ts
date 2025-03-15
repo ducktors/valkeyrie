@@ -9,7 +9,7 @@ import { inspect } from 'node:util'
 import { KvU64 } from '../src/kv-u64.js'
 import { type Key, type Mutation, Valkeyrie } from '../src/valkeyrie.js'
 
-describe('test', async () => {
+describe('test valkeyrie', async () => {
   async function dbTest(
     name: string,
     fn: (db: Valkeyrie) => Promise<void> | void,
@@ -55,7 +55,7 @@ describe('test', async () => {
     assert.deepEqual(result4.versionstamp, null)
   })
 
-  const VALUE_CASES = [
+  const VALUE_CASES: { name: string; value: unknown }[] = [
     { name: 'string', value: 'hello' },
     { name: 'number', value: 42 },
     { name: 'bigint', value: 42n },
@@ -68,16 +68,29 @@ describe('test', async () => {
     { name: 'array', value: [1, 2, 3] },
     { name: 'object', value: { a: 1, b: 2 } },
     {
+      name: 'Map',
+      value: new Map([
+        ['a', 1],
+        ['b', 2],
+      ]),
+    },
+    { name: 'Set', value: new Set([1, 2, 3]) },
+    {
       name: 'nested array',
       value: [
         [1, 2],
         [3, 4],
       ],
     },
-    { name: 'nested object', value: { a: { b: 1 } } },
   ]
 
-  for (const { name, value } of VALUE_CASES) {
+  for (const { name, value } of VALUE_CASES.concat({
+    name: 'nested object',
+    value: VALUE_CASES.reduce<Record<string, unknown>>((acc, curr) => {
+      acc[curr.name] = curr.value
+      return acc
+    }, {}),
+  })) {
     await dbTest(`set and get ${name} value`, async (db) => {
       await db.set(['a'], value)
       const result = await db.get(['a'])
@@ -105,12 +118,6 @@ describe('test', async () => {
     { name: 'symbol', value: Symbol() },
     { name: 'WeakMap', value: new WeakMap() },
     { name: 'WeakSet', value: new WeakSet() },
-    // {
-    //   name: "WebAssembly.Module",
-    //   value: new WebAssembly.Module(
-    //     new Uint8Array([0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00]),
-    //   ),
-    // },
     {
       name: 'SharedArrayBuffer',
       value: new SharedArrayBuffer(3),
@@ -2378,4 +2385,41 @@ describe('test', async () => {
   //     await completion
   //   },
   // })
+
+  await dbTest('list with more than 1000 elements', async (db) => {
+    // Create 1200 elements with prefix ['large'] in smaller batches
+    // First batch of 600
+    let atomic = db.atomic()
+    for (let i = 0; i < 600; i++) {
+      atomic.set(['large', i.toString().padStart(4, '0')], i)
+    }
+    let res = await atomic.commit()
+    assert(res.ok)
+
+    // Second batch of 600
+    atomic = db.atomic()
+    for (let i = 600; i < 1200; i++) {
+      atomic.set(['large', i.toString().padStart(4, '0')], i)
+    }
+    res = await atomic.commit()
+    assert(res.ok)
+
+    // List all elements without a limit (should return all 1200)
+    const allEntries = await Array.fromAsync(db.list({ prefix: ['large'] }))
+    assert.equal(allEntries.length, 1200, 'Should return all 1200 elements')
+
+    // Verify the first and last elements
+    assert.equal(allEntries[0]?.value, 0)
+    assert.equal(allEntries[1199]?.value, 1199)
+
+    // Test with a specific limit
+    const limitedEntries = await Array.fromAsync(
+      db.list({ prefix: ['large'] }, { limit: 500 }),
+    )
+    assert.equal(
+      limitedEntries.length,
+      500,
+      'Should respect the specified limit',
+    )
+  })
 })

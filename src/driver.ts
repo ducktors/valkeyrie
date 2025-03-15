@@ -24,15 +24,9 @@ export interface Driver {
 
 export function defineDriver(
   initDriver:
-    | ((
-        path?: string,
-        serializerInit?: () => Promise<Serializer>,
-      ) => Promise<Driver>)
+    | ((path?: string, serializerInit?: () => Serializer) => Promise<Driver>)
     | Driver,
-): (
-  path?: string,
-  serializerInit?: () => Promise<Serializer>,
-) => Promise<Driver> {
+): (path?: string, serializerInit?: () => Serializer) => Promise<Driver> {
   if (initDriver instanceof Function) {
     return initDriver
   }
