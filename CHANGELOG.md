@@ -1,5 +1,11 @@
 # valkeyrie
 
+## 0.4.0
+
+### Minor Changes
+
+- 1214c1e: feat: add cbor-x and msgpackr serialzers
+
 ## 0.3.0
 
 ### Minor Changes
