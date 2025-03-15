@@ -1,6 +1,6 @@
 import { BSON } from 'bson'
 import { KvU64 } from '../kv-u64.js'
-import { defineSerializer } from './serializer.js'
+import { type SerializedStruct, defineSerializer } from './serializer.js'
 
 /**
  * BSON serializer implementation
@@ -23,7 +23,7 @@ export const bsonSerializer = defineSerializer({
         value: {
           value: isU64 ? (value as KvU64).value.toString() : value,
           isU64,
-        },
+        } satisfies SerializedStruct,
       }
       const serialized = BSON.serialize(wrappedValue)
 
@@ -42,18 +42,17 @@ export const bsonSerializer = defineSerializer({
   },
 
   deserialize: (value: Uint8Array): unknown => {
-    const deserialized = BSON.deserialize(value) as {
-      value: {
-        value: unknown
-        isU64: number
-      }
+    const {
+      value: { value: deserialized, isU64 },
+    } = BSON.deserialize(value) as {
+      value: SerializedStruct
     }
 
-    if (deserialized.value.isU64) {
-      return new KvU64(BigInt(deserialized.value.value as string))
+    if (isU64) {
+      return new KvU64(BigInt(deserialized as string))
     }
 
-    return deserialized.value.value
+    return deserialized
   },
 })
 

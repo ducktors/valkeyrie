@@ -1,6 +1,6 @@
 import { deserialize, serialize } from 'node:v8'
 import { KvU64 } from '../kv-u64.js'
-import { defineSerializer } from './serializer.js'
+import { type SerializedStruct, defineSerializer } from './serializer.js'
 
 /**
  * Default serializer implementation using Node.js V8 serialization
@@ -13,7 +13,7 @@ export const v8Serializer = defineSerializer({
     const serialized = serialize({
       value: isU64 ? (value as KvU64).value : value,
       isU64,
-    })
+    } satisfies SerializedStruct)
 
     if (serialized.length > 65536 + 26) {
       throw new TypeError('Value too large (max 65536 bytes)')
@@ -21,11 +21,10 @@ export const v8Serializer = defineSerializer({
     return serialized
   },
 
-  deserialize: (value: Uint8Array) => {
-    const { value: deserialized, isU64 } = deserialize(value) as {
-      value: unknown
-      isU64: number
-    }
+  deserialize: (value: Uint8Array): unknown => {
+    const { value: deserialized, isU64 } = deserialize(
+      value,
+    ) as SerializedStruct
 
     if (isU64) {
       return new KvU64(deserialized as bigint)

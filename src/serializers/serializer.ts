@@ -1,3 +1,7 @@
+export type SerializedStruct = {
+  value: unknown
+  isU64: 0 | 1
+}
 export interface Serializer {
   /**
    * Serializes a value to a binary format

@@ -2385,4 +2385,41 @@ describe('test valkeyrie', async () => {
   //     await completion
   //   },
   // })
+
+  await dbTest('list with more than 1000 elements', async (db) => {
+    // Create 1200 elements with prefix ['large'] in smaller batches
+    // First batch of 600
+    let atomic = db.atomic()
+    for (let i = 0; i < 600; i++) {
+      atomic.set(['large', i.toString().padStart(4, '0')], i)
+    }
+    let res = await atomic.commit()
+    assert(res.ok)
+
+    // Second batch of 600
+    atomic = db.atomic()
+    for (let i = 600; i < 1200; i++) {
+      atomic.set(['large', i.toString().padStart(4, '0')], i)
+    }
+    res = await atomic.commit()
+    assert(res.ok)
+
+    // List all elements without a limit (should return all 1200)
+    const allEntries = await Array.fromAsync(db.list({ prefix: ['large'] }))
+    assert.equal(allEntries.length, 1200, 'Should return all 1200 elements')
+
+    // Verify the first and last elements
+    assert.equal(allEntries[0]?.value, 0)
+    assert.equal(allEntries[1199]?.value, 1199)
+
+    // Test with a specific limit
+    const limitedEntries = await Array.fromAsync(
+      db.list({ prefix: ['large'] }, { limit: 500 }),
+    )
+    assert.equal(
+      limitedEntries.length,
+      500,
+      'Should respect the specified limit',
+    )
+  })
 })
