@@ -126,18 +126,28 @@ Valkeyrie supports pluggable serializers that allow you to customize how values 
 
 - **V8 Serializer (Default)** - Uses Node.js's built-in `node:v8` module for efficient binary serialization
 - **JSON Serializer** - Human-readable format compatible with other programming languages
+- **BSON Serializer** - Uses MongoDB's BSON format for efficient binary serialization
+- **MessagePack Serializer** - Uses the msgpackr library for compact binary serialization
+- **CBOR-X Serializer** - Uses the cbor-x library for high-performance CBOR serialization
 - **Custom Serializers** - Create your own serializers for specialized needs like compression or encryption
 
 ```typescript
-import { Valkeyrie, jsonSerializer } from 'valkeyrie';
+import { Valkeyrie } from 'valkeyrie';
+import { bsonSerializer } from 'valkeyrie/serializers/bson';
+import { cborXSerializer } from 'valkeyrie/serializers/cbor-x';
 
-// Using the JSON serializer
-const db = await Valkeyrie.open('./data.db', {
-  serializer: jsonSerializer
+// Using the BSON serializer
+const dbBson = await Valkeyrie.open('./data.db', {
+  serializer: bsonSerializer
+});
+
+// Using the CBOR-X serializer
+const dbCbor = await Valkeyrie.open('./cbor-data.db', {
+  serializer: cborXSerializer
 });
 ```
 
-For detailed information about serializers, see the [Serializers documentation](./docs/serializers.md).
+For detailed information about serializers, see the [Serializers section in the documentation](./docs/documentation.md#serializer-comparison).
 
 ## Documentation
 
