@@ -1,5 +1,11 @@
 # valkeyrie
 
+## 0.3.0
+
+### Minor Changes
+
+- 44c725f: feat: refactor serializers and default driver
+
 ## 0.2.2
 
 ### Patch Changes
