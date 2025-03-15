@@ -1,16 +1,17 @@
 import assert from 'node:assert'
 import { describe, test } from 'node:test'
 import { KvU64 } from '../src/kv-u64.js'
-import { jsonSerializer } from '../src/serializers/json.js'
+import { cborXSerializer } from '../src/serializers/cbor-x.js'
 import { type Key, type Mutation, Valkeyrie } from '../src/valkeyrie.js'
-describe('json serializer', async () => {
+
+describe('cbor-x serializer', async () => {
   async function dbTest(
     name: string,
     fn: (db: Valkeyrie) => Promise<void> | void,
   ) {
     await test(name, async () => {
       const db: Valkeyrie = await Valkeyrie.open(':memory:', {
-        serializer: jsonSerializer,
+        serializer: cborXSerializer,
       })
       try {
         await fn(db)
@@ -55,11 +56,22 @@ describe('json serializer', async () => {
     const VALUE_CASES: { name: string; value: unknown }[] = [
       { name: 'string', value: 'hello' },
       { name: 'number', value: 42 },
+      { name: 'bigint', value: 42n },
       { name: 'boolean', value: true },
       { name: 'null', value: null },
       { name: 'undefined', value: undefined },
+      { name: 'Date', value: new Date(0) },
+      { name: 'Uint8Array', value: new Uint8Array([1, 2, 3]) },
       { name: 'array', value: [1, 2, 3] },
       { name: 'object', value: { a: 1, b: 2 } },
+      {
+        name: 'Map',
+        value: new Map([
+          ['a', 1],
+          ['b', 2],
+        ]),
+      },
+      { name: 'Set', value: new Set([1, 2, 3]) },
       {
         name: 'nested array',
         value: [
@@ -67,10 +79,16 @@ describe('json serializer', async () => {
           [3, 4],
         ],
       },
-      { name: 'nested object', value: { a: { b: 1 } } },
     ]
-
-    for (const { name, value } of VALUE_CASES) {
+    for (const { name, value } of VALUE_CASES.concat({
+      name: 'nested object',
+      value: VALUE_CASES.reduce<Record<string, unknown>>((acc, curr) => {
+        if (curr.value !== undefined) {
+          acc[curr.name] = curr.value
+        }
+        return acc
+      }, {}),
+    })) {
       await dbTest(`set and get ${name} value`, async (db) => {
         await db.set(['a'], value)
         const result = await db.get(['a'])
@@ -91,22 +109,6 @@ describe('json serializer', async () => {
       const largeResult = await db.get(['large-kvu64'])
       assert.deepEqual(largeResult.value, largeValue)
     })
-
-    await dbTest('handle undefined values', async (db) => {
-      // JSON serialization removes undefined when serialized
-      const objWithUndefined = { a: undefined, b: 'defined' }
-      await db.set(['undefined'], objWithUndefined)
-      const result = await db.get(['undefined'])
-      assert.deepEqual(result.value, { b: 'defined' })
-    })
-
-    await dbTest('handle Date values', async (db) => {
-      const date = new Date(0)
-      // JSON serialization transforms Date values to ISO strings
-      await db.set(['date'], date)
-      const result = await db.get(['date'])
-      assert.deepEqual(result.value, date.toISOString())
-    })
   })
 
   await describe('invalid value cases', async () => {
@@ -118,8 +120,8 @@ describe('json serializer', async () => {
       // Expect an error when trying to serialize a circular structure
       await assert.rejects(
         async () => await db.set(['a'], value),
-        TypeError,
-        'circular',
+        RangeError,
+        'Maximum call stack size exceeded',
       )
 
       // Verify the key doesn't exist
@@ -127,79 +129,54 @@ describe('json serializer', async () => {
       assert.deepEqual(result.key, ['a'])
       assert.strictEqual(result.value, null)
     })
-
-    await dbTest('set and get bigint (invalid)', async (db) => {
-      const value = { a: 42n }
-
-      // Expect an error when trying to serialize a circular structure
-      await assert.rejects(async () => await db.set(['a'], value), TypeError)
-
-      // Verify the key doesn't exist
-      const result = await db.get(['a'])
-      assert.deepEqual(result.key, ['a'])
-      assert.strictEqual(result.value, null)
-    })
-
-    await dbTest(
-      'set and get Uint8Array (transformed to a not empty object)',
-      async (db) => {
-        const value = new Uint8Array([1, 2, 3])
-
-        await db.set(['a'], value)
-
-        const result = await db.get(['a'])
-        assert.deepEqual(result.key, ['a'])
-        assert.deepEqual(result.value, { 0: 1, 1: 2, 2: 3 })
-      },
-    )
-
-    const INVALID_VALUES_TRANSFORMED_TO_UNDEFINED = [
-      { name: 'function', value: () => {} },
-      { name: 'symbol', value: Symbol() },
-    ]
-
-    for (const { name, value } of INVALID_VALUES_TRANSFORMED_TO_UNDEFINED) {
-      await dbTest(
-        `set and get ${name} value (transformed to undefined)`,
-        async (db) => {
-          await db.set(['a'], value)
-          const res = await db.get(['a'])
-          assert.deepEqual(res.key, ['a'])
-          assert.strictEqual(res.value, undefined)
-        },
-      )
-    }
 
     const INVALID_VALUE_CASES = [
       { name: 'WeakMap', value: new WeakMap() },
       { name: 'WeakSet', value: new WeakSet() },
-      { name: 'SharedArrayBuffer', value: new SharedArrayBuffer(3) },
-      { name: 'ArrayBuffer', value: new ArrayBuffer(3) },
       {
-        name: 'Map',
-        value: new Map<string | number, string | number>([
-          ['key1', 'value1'],
-          [1, 42],
-        ]),
+        name: 'SharedArrayBuffer',
+        value: new SharedArrayBuffer(3),
       },
-      {
-        name: 'Set',
-        value: new Set<string | number | boolean>(['value1', 42, true]),
-      },
-      { name: 'RegExp', value: /pattern/gi },
     ]
 
     for (const { name, value } of INVALID_VALUE_CASES) {
-      await dbTest(
-        `set and get ${name} value (transformed to {})`,
-        async (db) => {
-          await db.set(['a'], value)
-          const res = await db.get(['a'])
-          assert.deepEqual(res.key, ['a'])
-          assert.deepEqual(res.value, {})
-        },
-      )
+      await dbTest(`set and get ${name} value (invalid)`, async (db) => {
+        await db.set(['a'], value)
+        const res = await db.get(['a'])
+        assert.deepEqual(res.key, ['a'])
+        assert.deepEqual(res.value, {})
+      })
     }
+
+    await dbTest(
+      'set and get ArrayBuffer value (transformed to Uint8Array)',
+      async (db) => {
+        const value = new ArrayBuffer(3)
+        await db.set(['ArrayBuffer'], value)
+        const result = await db.get(['ArrayBuffer'])
+        assert.deepEqual(result.value, new Uint8Array(value))
+      },
+    )
+
+    await dbTest('set and get function value (invalid)', async (db) => {
+      await assert.rejects(
+        async () => await db.set(['function'], () => {}),
+        Error,
+        'Unknown type: function',
+      )
+      const result = await db.get(['function'])
+      assert.deepEqual(result.value, null)
+    })
+
+    await dbTest('set and get symbol value (invalid)', async (db) => {
+      await assert.rejects(
+        async () => await db.set(['symbol'], Symbol()),
+        Error,
+        'Unknown type: symbol',
+      )
+      const result = await db.get(['symbol'])
+      assert.deepEqual(result.value, null)
+    })
   })
 
   await dbTest('get many', async (db) => {
@@ -224,19 +201,18 @@ describe('json serializer', async () => {
   })
 
   await dbTest('value size limit', async (db) => {
-    // For JSON serializer, the limit is based on the serialized JSON string size
-    const smallValue = 'a'.repeat(65535)
-    const largeValue = 'a'.repeat(65536)
+    const lastValidValue = new Uint8Array(65536)
+    const firstInvalidValue = new Uint8Array(65537)
 
-    const res = await db.set(['a'], smallValue)
+    const res = await db.set(['a'], lastValidValue)
     assert.deepEqual(await db.get(['a']), {
       key: ['a'],
-      value: smallValue,
+      value: lastValidValue,
       versionstamp: res.versionstamp,
     })
 
     await assert.rejects(
-      async () => await db.set(['b'], largeValue),
+      async () => await db.set(['b'], firstInvalidValue),
       TypeError,
       'Value too large (max 65536 bytes)',
     )

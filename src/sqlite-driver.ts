@@ -12,8 +12,11 @@ type SqlTable = Pick<DriverValue, 'versionstamp'> & {
 export const sqliteDriver = defineDriver(
   async (path = ':memory:', customSerializer?: () => Serializer) => {
     const db = new DatabaseSync(path)
-    // Enable WAL mode for better performance
-    db.exec('PRAGMA journal_mode = WAL')
+
+    db.exec(`
+    PRAGMA synchronous = NORMAL;
+    PRAGMA journal_mode = WAL2
+    `)
 
     // Create the KV table with versioning and expiry support
     db.exec(`

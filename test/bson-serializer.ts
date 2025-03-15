@@ -124,7 +124,7 @@ describe('bson serializer', async () => {
       // Verify the key doesn't exist
       const result = await db.get(['a'])
       assert.deepEqual(result.key, ['a'])
-      assert.equal(result.value, null)
+      assert.strictEqual(result.value, null)
     })
 
     const INVALID_VALUE_CASES = [
@@ -154,7 +154,7 @@ describe('bson serializer', async () => {
         await assert.rejects(async () => await db.set(['a'], value), Error)
         const res = await db.get(['a'])
         assert.deepEqual(res.key, ['a'])
-        assert.deepEqual(res.value, null)
+        assert.strictEqual(res.value, null)
       })
     }
   })

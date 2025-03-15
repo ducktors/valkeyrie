@@ -41,6 +41,16 @@
       "require": "./dist/cjs/serializers/bson.js",
       "types": "./dist/esm/serializers/bson.d.ts"
     },
+    "./serializers/msgpackr": {
+      "import": "./dist/esm/serializers/msgpackr.js",
+      "require": "./dist/cjs/serializers/msgpackr.js",
+      "types": "./dist/esm/serializers/msgpackr.d.ts"
+    },
+    "./serializers/cbor-x": {
+      "import": "./dist/esm/serializers/cbor-x.js",
+      "require": "./dist/cjs/serializers/cbor-x.js",
+      "types": "./dist/esm/serializers/cbor-x.d.ts"
+    },
     "./package.json": "./package.json"
   },
   "author": "Maksim Sinik <maksim@sinik.it>",
@@ -108,10 +118,13 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "@biomejs/biome",
+      "cbor-extract",
       "esbuild"
     ]
   },
   "dependencies": {
-    "bson": "^6.10.3"
+    "bson": "^6.10.3",
+    "cbor-x": "^1.6.0",
+    "msgpackr": "^1.11.2"
   }
 }

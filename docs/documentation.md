@@ -329,6 +329,120 @@ The JSON serializer is particularly useful when:
 
 For detailed information about serializers, see the [Serializers documentation](./serializers.md).
 
+### BSON Serializer
+
+The BSON serializer uses MongoDB's BSON format for efficient binary serialization:
+
+- Primitive types: string, number, boolean, null, undefined
+- Complex types: objects, arrays
+- Date objects
+- RegExp objects
+- Binary data: Uint8Array, ArrayBuffer
+- KvU64 (specialized 64-bit unsigned integer)
+
+Unsupported types (will throw an error):
+- Functions
+- Symbols
+- WeakMap, WeakSet
+- Map
+- Set
+- SharedArrayBuffer
+- BigInt
+- Objects with circular references
+
+To use the BSON serializer:
+
+```typescript
+import { Valkeyrie } from 'valkeyrie';
+import { bsonSerializer } from 'valkeyrie/serializers/bson';
+
+const db = await Valkeyrie.open('./bson-data.db', {
+  serializer: bsonSerializer
+});
+```
+
+The BSON serializer is particularly useful when:
+- You need interoperability with MongoDB
+- You need efficient binary serialization with good type support
+- You need to store complex data structures
+
+### MessagePack Serializer
+
+The MessagePack serializer uses the msgpackr library for compact binary serialization:
+
+- Primitive types: string, number, boolean, null, undefined
+- Complex types: objects, arrays
+- Date objects
+- Binary data: Uint8Array, ArrayBuffer
+- BigInt values
+- KvU64 (specialized 64-bit unsigned integer)
+
+Special handling:
+- Map objects are converted to plain objects
+- Set objects are converted to arrays
+
+Unsupported types (will throw an error):
+- Functions
+- Symbols
+- WeakMap, WeakSet
+- SharedArrayBuffer
+- Objects with circular references
+
+To use the MessagePack serializer:
+
+```typescript
+import { Valkeyrie } from 'valkeyrie';
+import { msgpackrSerializer } from 'valkeyrie/serializers/msgpackr';
+
+const db = await Valkeyrie.open('./msgpack-data.db', {
+  serializer: msgpackrSerializer
+});
+```
+
+The MessagePack serializer is particularly useful when:
+- You need a compact binary format
+- You need cross-language compatibility
+- You need efficient network transmission
+- You need better performance than JSON
+
+### CBOR-X Serializer
+
+The CBOR-X serializer uses the cbor-x library for high-performance CBOR serialization:
+
+- Primitive types: string, number, boolean, null, undefined
+- Complex types: objects, arrays
+- Date objects
+- Map and Set objects
+- Binary data: Uint8Array, ArrayBuffer (converted to Uint8Array)
+- BigInt values
+- KvU64 (specialized 64-bit unsigned integer)
+
+Unsupported types (will throw an error):
+- Functions
+- Symbols
+- WeakMap, WeakSet
+- SharedArrayBuffer
+- Objects with circular references
+
+To use the CBOR-X serializer:
+
+```typescript
+import { Valkeyrie } from 'valkeyrie';
+import { cborXSerializer } from 'valkeyrie/serializers/cbor-x';
+
+const db = await Valkeyrie.open('./cbor-data.db', {
+  serializer: cborXSerializer
+});
+```
+
+The CBOR-X serializer is particularly useful when:
+- You need extremely high performance
+- You need a standardized binary format (RFC 8949)
+- You need the smallest possible data size
+- You need cross-language compatibility
+
+For detailed information about serializers, see the [Serializers documentation](./serializers.md).
+
 ### Examples for Each Value Type
 
 Here are examples of storing and retrieving different value types, with notes on serializer compatibility:
@@ -559,8 +673,11 @@ The main difference between the serializers is in how the data is stored interna
 
 - **V8 Serializer**: Uses Node.js's built-in serialization for efficient binary storage
 - **JSON Serializer**: Uses a custom JSON-based format with type information for better interoperability
+- **BSON Serializer**: Uses MongoDB's BSON format for efficient binary serialization
+- **MessagePack Serializer**: Uses the msgpackr library for compact binary serialization
+- **CBOR-X Serializer**: Uses the cbor-x library for high-performance CBOR serialization
 
-Both serializers preserve the original types when retrieving values, making them largely interchangeable from an API perspective, though with different performance and compatibility characteristics.
+All serializers preserve the original types when retrieving values, making them largely interchangeable from an API perspective, though with different performance and compatibility characteristics.
 
 ## Working with 64-bit Unsigned Integers (KvU64)
 
@@ -852,14 +969,291 @@ const db = await Valkeyrie.open('./data.db', {
 });
 ```
 
-Valkeyrie comes with two built-in serializers:
+Valkeyrie comes with several built-in serializers:
 
 - **V8 Serializer (Default)** - Uses Node.js's built-in `node:v8` module for efficient binary serialization
 - **JSON Serializer** - Human-readable format compatible with other programming languages
+- **BSON Serializer** - Uses MongoDB's BSON format for efficient binary serialization
+- **MessagePack Serializer** - Uses the msgpackr library for compact binary serialization
+- **CBOR-X Serializer** - Uses the cbor-x library for high-performance CBOR serialization
 
 You can also create custom serializers for specialized needs like compression or encryption.
 
-For detailed information about serializers, see the [Serializers documentation](./serializers.md).
+#### Using Different Serializers
+
+```typescript
+import { Valkeyrie } from 'valkeyrie';
+import { jsonSerializer } from 'valkeyrie/serializers/json';
+import { bsonSerializer } from 'valkeyrie/serializers/bson';
+import { msgpackrSerializer } from 'valkeyrie/serializers/msgpackr';
+import { cborXSerializer } from 'valkeyrie/serializers/cbor-x';
+
+// Using the JSON serializer
+const dbJson = await Valkeyrie.open('./json-data.db', {
+  serializer: jsonSerializer
+});
+
+// Using the BSON serializer
+const dbBson = await Valkeyrie.open('./bson-data.db', {
+  serializer: bsonSerializer
+});
+
+// Using the MessagePack serializer
+const dbMsgpack = await Valkeyrie.open('./msgpack-data.db', {
+  serializer: msgpackrSerializer
+});
+
+// Using the CBOR-X serializer
+const dbCbor = await Valkeyrie.open('./cbor-data.db', {
+  serializer: cborXSerializer
+});
+```
+
+#### Serializer Comparison
+
+| Serializer | Format | Size Efficiency | Performance | Cross-Language | Human-Readable | Special Features |
+|------------|--------|-----------------|------------|----------------|----------------|-----------------|
+| V8 (Default) | Binary | High | Very High | No | No | Preserves object references, handles circular references |
+| JSON | Text | Low | Medium | Yes | Yes | Human-readable, widely compatible |
+| BSON | Binary | Medium | High | Yes | No | MongoDB compatibility, efficient binary encoding |
+| MessagePack | Binary | High | High | Yes | No | Compact format, efficient for network transmission |
+| CBOR-X | Binary | Very High | Very High | Yes | No | RFC 8949 standard, extremely fast serialization |
+
+#### Serializer Interface
+
+If you want to create your own serializer, you need to implement the `Serializer` interface:
+
+```typescript
+export interface Serializer {
+  /**
+   * Serializes a value to a binary format
+   * @param value The value to serialize
+   * @returns A Uint8Array containing the serialized value
+   */
+  serialize: (value: unknown) => Uint8Array
+
+  /**
+   * Deserializes a binary value back to its original form
+   * @param value The binary value to deserialize
+   * @returns The deserialized value
+   */
+  deserialize: (value: Uint8Array) => unknown
+}
+```
+
+#### Creating Custom Serializers
+
+You can create your own custom serializers by implementing the `Serializer` interface:
+
+```typescript
+import { defineSerializer, type SerializedStruct } from 'valkeyrie/serializers'
+import { KvU64 } from 'valkeyrie/KvU64'
+
+// Create a custom serializer
+export const myCustomSerializer = defineSerializer({
+  serialize: (value: unknown): Uint8Array => {
+    // Determine if the value is a KvU64
+    const isU64 = value instanceof KvU64 ? 1 : 0
+    
+    // Implement your serialization logic here
+    // For example, using JSON with some custom handling
+    const serialized = Buffer.from(
+      JSON.stringify({
+        value: isU64 ? (value as KvU64).value.toString() : value,
+        isU64,
+      } satisfies SerializedStruct),
+      'utf8',
+    )
+    
+    // Check size limits
+    if (serialized.length > 65536 + 21) {
+      throw new TypeError('Value too large (max 65536 bytes)')
+    }
+    
+    return serialized
+  },
+
+  deserialize: (value: Uint8Array): unknown => {
+    // Implement your deserialization logic here
+    // For example, parsing JSON and handling special types
+    const jsonString = Buffer.from(value).toString('utf8')
+    const { value: deserialized, isU64 } = JSON.parse(jsonString) as SerializedStruct
+    
+    // Handle KvU64 values
+    if (isU64) {
+      return new KvU64(BigInt(deserialized as string))
+    }
+    
+    return deserialized
+  }
+})
+
+// Use your custom serializer
+const db = await Valkeyrie.open('./data/custom.db', {
+  serializer: myCustomSerializer
+})
+```
+
+#### Best Practices for Serializers
+
+- Choose the serializer based on your specific needs:
+  - Use the **V8 serializer** for maximum performance and compatibility with most JavaScript types, especially when working with circular references
+  - Use the **JSON serializer** for human-readable storage or cross-language compatibility when you need to inspect the database contents
+  - Use the **BSON serializer** for efficient binary encoding with MongoDB compatibility
+  - Use the **MessagePack serializer** for compact binary format with good cross-language compatibility
+  - Use the **CBOR-X serializer** for highest performance and smallest data size with standardized format
+  - Create a custom serializer for specialized needs (e.g., compression, encryption)
+- Be consistent with your serializer choice for a given database
+- Consider the trade-offs between storage size, performance, and compatibility
+- If you need to store objects with circular references, use the V8 serializer
+- If you need human-readable storage, use the JSON serializer
+- If you need the smallest possible data size, use the CBOR-X serializer
+- If you need MongoDB compatibility, use the BSON serializer
+- If you need efficient network transmission, use the MessagePack serializer
+
+#### Detailed Serializer Information
+
+##### V8 Serializer (Default)
+
+**Features:**
+- Supports most JavaScript data types
+- Preserves object references and circular references
+- Efficient binary format
+
+**Limitations:**
+- The serialized data is not human-readable
+- Not compatible with other programming languages
+- Tied to the specific V8 version
+- Unsupported types: WeakMap, WeakSet, Function, Symbol, SharedArrayBuffer
+
+**Supported Types:**
+- String
+- Number
+- Boolean
+- null
+- undefined
+- Date
+- RegExp
+- Array
+- Object
+- Map
+- Set
+- Uint8Array/ArrayBuffer
+- BigInt
+- KvU64 (Valkeyrie's 64-bit unsigned integer type)
+
+##### JSON Serializer
+
+**Features:**
+- Human-readable format
+- Compatible with other programming languages
+- Can be inspected and debugged easily
+
+**Limitations:**
+- Does not support circular references (will throw an error)
+- Less efficient than V8 serializer for complex objects
+- **Circular References**: The JSON serializer cannot handle circular references. If you try to store an object with circular references, it will throw an error.
+- **Unsupported Types**: Some JavaScript types are not supported by JSON, such as `Function`, `Symbol`, `WeakMap`, `WeakSet`, and `SharedArrayBuffer`. These types will be serialized as `null`.
+- **Binary Data Size**: When storing binary data (like `Uint8Array` or `ArrayBuffer`), be aware that the JSON serializer encodes this data as base64 strings, which increases the size by approximately 33%. This means that a binary value that is close to the 65KB limit might exceed the limit when serialized to JSON.
+
+**Supported Types:**
+- String
+- Number
+- Boolean
+- null
+- Array
+- Object
+- Date
+- Map
+- Set
+- Uint8Array/ArrayBuffer
+- BigInt
+- KvU64
+
+##### BSON Serializer
+
+**Features:**
+- Efficient binary encoding
+- Support for MongoDB-specific types
+- Preserves type information
+
+**Limitations:**
+- Unsupported types: Function, Symbol, WeakMap, WeakSet, SharedArrayBuffer, Map, Set, BigInt
+- The maximum serialized size is limited to 65536 bytes
+- **Circular References**: The BSON serializer cannot handle circular references. If you try to store an object with circular references, it will throw an error.
+
+**Supported Types:**
+- String
+- Number
+- Boolean
+- null
+- undefined
+- Date
+- RegExp
+- Array
+- Object
+- Uint8Array/ArrayBuffer
+- KvU64
+
+##### MessagePack Serializer
+
+**Features:**
+- Compact binary format (smaller than JSON)
+- Fast serialization and deserialization
+- Cross-language compatibility
+- Efficient for network transmission
+
+**Limitations:**
+- Map objects are converted to plain objects
+- Set objects are converted to arrays
+- The maximum serialized size is limited to 65536 bytes
+- **Circular References**: The MessagePack serializer cannot handle circular references. If you try to store an object with circular references, it will throw an error.
+- **Symbol Type**: Symbol values are not supported and will throw an error.
+
+**Supported Types:**
+- String
+- Number
+- Boolean
+- null
+- undefined
+- Date
+- Array
+- Object
+- Map (converted to plain object)
+- Set (converted to array)
+- Uint8Array/ArrayBuffer
+- BigInt
+- KvU64
+
+##### CBOR-X Serializer
+
+**Features:**
+- Highly efficient binary encoding
+- Extremely fast serialization and deserialization
+- Supports a wide range of data types
+- Standardized format (RFC 8949)
+- Smaller output size compared to JSON
+
+**Limitations:**
+- ArrayBuffer is converted to Uint8Array
+- The maximum serialized size is limited to 65536 bytes
+- **Circular References**: The CBOR-X serializer cannot handle circular references. If you try to store an object with circular references, it will throw an error.
+- **Symbol Type**: Symbol values are not supported and will throw an error.
+
+**Supported Types:**
+- String
+- Number
+- Boolean
+- null
+- undefined
+- Date
+- Array
+- Object
+- Map
+- Set
+- Uint8Array/ArrayBuffer (converted to Uint8Array)
+- BigInt
+- KvU64
 
 ## API Reference
 

@@ -599,27 +599,27 @@ describe('test valkeyrie', async () => {
 
   test('KvU64 unbox', () => {
     const a = new KvU64(1n)
-    assert.equal(a.value, 1n)
+    assert.strictEqual(a.value, 1n)
   })
 
   test('KvU64 unbox with valueOf', () => {
     const a = new KvU64(1n)
-    assert.equal(a.valueOf(), 1n)
+    assert.strictEqual(a.valueOf(), 1n)
   })
 
   test('KvU64 auto-unbox', () => {
     const a = new KvU64(1n)
-    assert.equal((a as unknown as bigint) + 1n, 2n)
+    assert.strictEqual((a as unknown as bigint) + 1n, 2n)
   })
 
   test('KvU64 toString', () => {
     const a = new KvU64(1n)
-    assert.equal(a.toString(), '1')
+    assert.strictEqual(a.toString(), '1')
   })
 
   test('KvU64 inspect', () => {
     const a = new KvU64(1n)
-    assert.equal(inspect(a), '[KvU64: 1n]')
+    assert.strictEqual(inspect(a), '[KvU64: 1n]')
   })
 
   async function setupData(db: Valkeyrie): Promise<string> {
@@ -894,7 +894,7 @@ describe('test valkeyrie', async () => {
     ])
 
     const cursor = iterator.cursor
-    assert.equal(cursor, 'AmIA')
+    assert.strictEqual(cursor, 'AmIA')
 
     const iterator2 = db.list({ prefix: ['a'] }, { cursor })
     const values2 = await Array.fromAsync(iterator2)
@@ -916,7 +916,7 @@ describe('test valkeyrie', async () => {
     ])
 
     const cursor = iterator.cursor
-    assert.equal(cursor, 'AmQA')
+    assert.strictEqual(cursor, 'AmQA')
 
     const iterator2 = db.list({ prefix: ['a'] }, { cursor, reverse: true })
     const values2 = await Array.fromAsync(iterator2)
@@ -2406,17 +2406,21 @@ describe('test valkeyrie', async () => {
 
     // List all elements without a limit (should return all 1200)
     const allEntries = await Array.fromAsync(db.list({ prefix: ['large'] }))
-    assert.equal(allEntries.length, 1200, 'Should return all 1200 elements')
+    assert.strictEqual(
+      allEntries.length,
+      1200,
+      'Should return all 1200 elements',
+    )
 
     // Verify the first and last elements
-    assert.equal(allEntries[0]?.value, 0)
-    assert.equal(allEntries[1199]?.value, 1199)
+    assert.strictEqual(allEntries[0]?.value, 0)
+    assert.strictEqual(allEntries[1199]?.value, 1199)
 
     // Test with a specific limit
     const limitedEntries = await Array.fromAsync(
       db.list({ prefix: ['large'] }, { limit: 500 }),
     )
-    assert.equal(
+    assert.strictEqual(
       limitedEntries.length,
       500,
       'Should respect the specified limit',
