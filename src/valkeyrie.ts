@@ -59,7 +59,7 @@ export class Valkeyrie {
   private static internalConstructor = false
   private driver: Driver
   private lastVersionstamp: bigint
-
+  private closed = false
   private constructor(functions: Driver) {
     if (!Valkeyrie.internalConstructor) {
       throw new TypeError('Use Valkeyrie.open() to create a new instance')
@@ -87,8 +87,9 @@ export class Valkeyrie {
     return db
   }
 
-  async close(): Promise<void> {
+  public async close(): Promise<void> {
     await this.driver.close()
+    this.closed = true
   }
 
   /**
@@ -144,7 +145,10 @@ export class Valkeyrie {
    * @param {Key} key - The key to be hashed.
    * @returns {Buffer} - The buffer representation of the hashed key.
    */
-  private keyToBuffer(key: Key): Uint8Array {
+  private keyToBuffer(
+    key: Key,
+    operation: 'write' | 'read' = 'read',
+  ): Uint8Array {
     const parts = key.map((part) => {
       let bytes: Buffer
 
@@ -190,7 +194,11 @@ export class Valkeyrie {
     // Join all parts with a null byte delimiter
     const fullKey = Buffer.concat([...parts])
     if (fullKey.length > 2048) {
-      throw new TypeError('Key too large for write (max 2048 bytes)')
+      throw new TypeError(
+        `Key too large for ${operation} (max ${
+          operation === 'write' ? 2048 : 2049
+        } bytes)`,
+      )
     }
     return fullKey
   }
@@ -201,8 +209,8 @@ export class Valkeyrie {
    * @param {Key} key - The key to hash.
    * @returns {string} - The hex string representation of the hashed key.
    */
-  private hashKey(key: Key): string {
-    return Buffer.from(this.keyToBuffer(key)).toString('hex')
+  private hashKey(key: Key, operation?: 'write' | 'read'): string {
+    return Buffer.from(this.keyToBuffer(key, operation)).toString('hex')
   }
 
   /**
@@ -331,12 +339,13 @@ export class Valkeyrie {
     return parts
   }
 
-  async get<T = unknown>(key: Key): Promise<EntryMaybe<T>> {
+  public async get<T = unknown>(key: Key): Promise<EntryMaybe<T>> {
+    this.throwIfClosed()
     this.validateKeys([key])
     if (key.length === 0) {
       throw new Error('Key cannot be empty')
     }
-    const keyHash = this.hashKey(key)
+    const keyHash = this.hashKey(key, 'read')
     const now = Date.now()
     const result = await this.driver.get(keyHash, now)
 
@@ -351,7 +360,8 @@ export class Valkeyrie {
     }
   }
 
-  async getMany(keys: Key[]): Promise<EntryMaybe[]> {
+  public async getMany(keys: Key[]): Promise<EntryMaybe[]> {
+    this.throwIfClosed()
     this.validateKeys(keys)
     if (keys.length > 10) {
       throw new TypeError('Too many ranges (max 10)')
@@ -359,16 +369,17 @@ export class Valkeyrie {
     return Promise.all(keys.map((key) => this.get(key)))
   }
 
-  async set<T = unknown>(
+  public async set<T = unknown>(
     key: Key,
     value: T,
     options: SetOptions = {},
   ): Promise<{ ok: true; versionstamp: string }> {
+    this.throwIfClosed()
     this.validateKeys([key])
     if (key.length === 0) {
       throw new Error('Key cannot be empty')
     }
-    const keyHash = this.hashKey(key)
+    const keyHash = this.hashKey(key, 'write')
     const versionstamp = this.generateVersionstamp()
 
     await this.driver.set(
@@ -381,7 +392,8 @@ export class Valkeyrie {
     return { ok: true, versionstamp }
   }
 
-  async delete(key: Key): Promise<void> {
+  public async delete(key: Key): Promise<void> {
+    this.throwIfClosed()
     this.validateKeys([key])
     const keyHash = this.hashKey(key)
     await this.driver.delete(keyHash)
@@ -394,14 +406,18 @@ export class Valkeyrie {
   ): void {
     if (key.length <= prefix.length) {
       throw new TypeError(
-        `${type} key is not in the keyspace defined by prefix`,
+        `${
+          type.charAt(0).toUpperCase() + type.slice(1)
+        } key is not in the keyspace defined by prefix`,
       )
     }
     // Check if key has the same prefix
     const keyPrefix = key.slice(0, prefix.length)
     if (!keyPrefix.every((part, i) => part === prefix[i])) {
       throw new TypeError(
-        `${type} key is not in the keyspace defined by prefix`,
+        `${
+          type.charAt(0).toUpperCase() + type.slice(1)
+        } key is not in the keyspace defined by prefix`,
       )
     }
   }
@@ -623,10 +639,14 @@ export class Valkeyrie {
     return { ...bounds, prefixHash }
   }
 
-  list<T = unknown>(
+  public list<T = unknown>(
     selector: ListSelector,
     options: ListOptions = {},
-  ): AsyncIterableIterator<Entry<T>> & { readonly cursor: string } {
+  ): AsyncIterableIterator<Entry<T>> & {
+    readonly cursor: string
+    [Symbol.asyncDispose](): Promise<void>
+  } {
+    this.throwIfClosed()
     this.validateSelector(selector)
 
     const {
@@ -698,24 +718,30 @@ export class Valkeyrie {
         if (!lastPart) return ''
         return self.getCursorFromKey([lastPart])
       },
+      async [Symbol.asyncDispose]() {
+        await self.close()
+      },
     }
 
     return wrapper
   }
 
-  async cleanup(): Promise<void> {
+  public async cleanup(): Promise<void> {
+    this.throwIfClosed()
     const now = Date.now()
     this.driver.cleanup(now)
   }
 
-  atomic(): Atomic {
+  public atomic(): Atomic {
+    this.throwIfClosed()
     return new Atomic(this)
   }
 
-  async executeAtomicOperation(
+  public async executeAtomicOperation(
     checks: Check[],
     mutations: Mutation[],
   ): Promise<{ ok: true; versionstamp: string } | { ok: false }> {
+    this.throwIfClosed()
     const versionstamp = this.generateVersionstamp()
 
     try {
@@ -813,6 +839,20 @@ export class Valkeyrie {
       return { ok: false }
     }
   }
+
+  [Symbol.dispose](): void {
+    this.close().catch(() => {})
+  }
+
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.close()
+  }
+
+  private throwIfClosed(): void {
+    if (this.closed) {
+      throw new Error('Database is closed')
+    }
+  }
 }
 
 // Internal class - not exported
@@ -843,7 +883,7 @@ class Atomic {
   check(...checks: AtomicCheck[]): Atomic {
     for (const check of checks) {
       if (this.checks.length >= 100) {
-        throw new TypeError('Max 100 checks per atomic operation')
+        throw new TypeError('Too many checks (max 100)')
       }
       this.valkeyrie.validateKeys([check.key])
       this.validateVersionstamp(check.versionstamp)
@@ -855,7 +895,7 @@ class Atomic {
   mutate(...mutations: Mutation[]): Atomic {
     for (const mutation of mutations) {
       if (this.mutations.length >= 1000) {
-        throw new TypeError('Max 1000 mutations per atomic operation')
+        throw new TypeError('Too many mutations (max 1000)')
       }
       this.valkeyrie.validateKeys([mutation.key])
       if (mutation.key.length === 0) {
@@ -893,11 +933,15 @@ class Atomic {
           }
           break
         case 'sum':
+          if (!('value' in mutation) || !(mutation.value instanceof KvU64)) {
+            throw new TypeError('Cannot sum KvU64 with Number')
+          }
+          break
         case 'max':
         case 'min':
           if (!('value' in mutation) || !(mutation.value instanceof KvU64)) {
             throw new TypeError(
-              `${mutation.type} mutation requires a KvU64 value`,
+              `Failed to perform '${mutation.type}' mutation on a non-U64 operand`,
             )
           }
           break
