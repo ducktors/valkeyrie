@@ -429,8 +429,11 @@ describe('test valkeyrie', async () => {
           .mutate({ key: ['a'], value: new KvU64(1n), type: 'sum' })
           .commit()
       },
-      TypeError,
-      "Failed to perform 'sum' mutation on a non-U64 value in the database",
+      {
+        name: 'TypeError',
+        message:
+          "Failed to perform 'sum' mutation on a non-U64 value in the database",
+      },
     )
   })
 
@@ -446,8 +449,10 @@ describe('test valkeyrie', async () => {
             .mutate({ key: ['a'], value: 1, type: 'sum' })
             .commit()
         },
-        TypeError,
-        'Cannot sum KvU64 with Number',
+        {
+          name: 'TypeError',
+          message: 'Cannot sum KvU64 with Number',
+        },
       )
     },
   )
@@ -491,8 +496,11 @@ describe('test valkeyrie', async () => {
           .mutate({ key: ['a'], value: new KvU64(1n), type: 'min' })
           .commit()
       },
-      TypeError,
-      "Failed to perform 'min' mutation on a non-U64 value in the database",
+      {
+        name: 'TypeError',
+        message:
+          "Failed to perform 'min' mutation on a non-U64 value in the database",
+      },
     )
   })
 
@@ -508,8 +516,10 @@ describe('test valkeyrie', async () => {
             .mutate({ key: ['a'], value: 1, type: 'min' })
             .commit()
         },
-        TypeError,
-        "Failed to perform 'min' mutation on a non-U64 operand",
+        {
+          name: 'TypeError',
+          message: "Failed to perform 'min' mutation on a non-U64 operand",
+        },
       )
     },
   )
@@ -553,8 +563,11 @@ describe('test valkeyrie', async () => {
           .mutate({ key: ['a'], value: new KvU64(1n), type: 'max' })
           .commit()
       },
-      TypeError,
-      "Failed to perform 'max' mutation on a non-U64 value in the database",
+      {
+        name: 'TypeError',
+        message:
+          "Failed to perform 'max' mutation on a non-U64 value in the database",
+      },
     )
   })
 
@@ -570,8 +583,10 @@ describe('test valkeyrie', async () => {
             .mutate({ key: ['a'], value: 1, type: 'max' })
             .commit()
         },
-        TypeError,
-        "Failed to perform 'max' mutation on a non-U64 operand",
+        {
+          name: 'TypeError',
+          message: "Failed to perform 'max' mutation on a non-U64 operand",
+        },
       )
     },
   )
@@ -694,8 +709,10 @@ describe('test valkeyrie', async () => {
     await assert.rejects(
       async () =>
         await Array.fromAsync(db.list({ prefix: ['a'], start: ['a'] })),
-      TypeError,
-      'Start key is not in the keyspace defined by prefix',
+      {
+        name: 'TypeError',
+        message: 'Start key is not in the keyspace defined by prefix',
+      },
     )
   })
 
@@ -704,8 +721,10 @@ describe('test valkeyrie', async () => {
     await assert.rejects(
       async () =>
         await Array.fromAsync(db.list({ prefix: ['b'], start: ['a'] })),
-      TypeError,
-      'Start key is not in the keyspace defined by prefix',
+      {
+        name: 'TypeError',
+        message: 'Start key is not in the keyspace defined by prefix',
+      },
     )
   })
 
@@ -732,8 +751,10 @@ describe('test valkeyrie', async () => {
     await setupData(db)
     await assert.rejects(
       async () => await Array.fromAsync(db.list({ prefix: ['a'], end: ['a'] })),
-      TypeError,
-      'End key is not in the keyspace defined by prefix',
+      {
+        name: 'TypeError',
+        message: 'End key is not in the keyspace defined by prefix',
+      },
     )
   })
 
@@ -741,8 +762,10 @@ describe('test valkeyrie', async () => {
     await setupData(db)
     await assert.rejects(
       async () => await Array.fromAsync(db.list({ prefix: ['a'], end: ['b'] })),
-      TypeError,
-      'End key is not in the keyspace defined by prefix',
+      {
+        name: 'TypeError',
+        message: 'End key is not in the keyspace defined by prefix',
+      },
     )
   })
 
@@ -1079,8 +1102,10 @@ describe('test valkeyrie', async () => {
     await setupData(db)
     await assert.rejects(
       async () => await Array.fromAsync(db.list({ start: ['b'], end: ['a'] })),
-      TypeError,
-      'Start key is greater than end key',
+      {
+        name: 'TypeError',
+        message: 'Start key is greater than end key',
+      },
     )
   })
 
@@ -1207,17 +1232,15 @@ describe('test valkeyrie', async () => {
       versionstamp: res.versionstamp,
     })
 
-    await assert.rejects(
-      async () => await db.set([firstInvalidKey], 1),
-      TypeError,
-      'Key too large for write (max 2048 bytes)',
-    )
+    await assert.rejects(async () => await db.set([firstInvalidKey], 1), {
+      name: 'TypeError',
+      message: 'Key too large for write (max 2048 bytes)',
+    })
 
-    await assert.rejects(
-      async () => await db.get([firstInvalidKey]),
-      TypeError,
-      'Key too large for read (max 2049 bytes)',
-    )
+    await assert.rejects(async () => await db.get([firstInvalidKey]), {
+      name: 'TypeError',
+      message: 'Key too large for read (max 2049 bytes)',
+    })
   })
 
   await dbTest('value size limit', async (db) => {
@@ -1231,11 +1254,10 @@ describe('test valkeyrie', async () => {
       versionstamp: res.versionstamp,
     })
 
-    await assert.rejects(
-      async () => await db.set(['b'], firstInvalidValue),
-      TypeError,
-      'Value too large (max 65536 bytes)',
-    )
+    await assert.rejects(async () => await db.set(['b'], firstInvalidValue), {
+      name: 'TypeError',
+      message: 'Value too large (max 65536 bytes)',
+    })
   })
 
   await dbTest('operation size limit', async (db) => {
@@ -1250,11 +1272,10 @@ describe('test valkeyrie', async () => {
     const res = await db.getMany(lastValidKeys)
     assert.deepEqual(res.length, 10)
 
-    await assert.rejects(
-      async () => await db.getMany(firstInvalidKeys),
-      TypeError,
-      'Too many ranges (max 10)',
-    )
+    await assert.rejects(async () => await db.getMany(firstInvalidKeys), {
+      name: 'TypeError',
+      message: 'Too many ranges (max 10)',
+    })
 
     const res2 = await Array.fromAsync(
       db.list({ prefix: ['a'] }, { batchSize: 1000 }),
@@ -1264,8 +1285,10 @@ describe('test valkeyrie', async () => {
     await assert.rejects(
       async () =>
         await Array.fromAsync(db.list({ prefix: ['a'] }, { batchSize: 1001 })),
-      TypeError,
-      'Too many entries (max 1000)',
+      {
+        name: 'TypeError',
+        message: 'Too many entries (max 1000)',
+      },
     )
 
     // when batchSize is not specified, limit is used but is clamped to 500
@@ -1318,8 +1341,10 @@ describe('test valkeyrie', async () => {
           )
           .commit()
       },
-      TypeError,
-      'Too many checks (max 100)',
+      {
+        name: 'TypeError',
+        message: 'Too many checks (max 100)',
+      },
     )
 
     const validMutateKeys: Key[] = new Array(1000)
@@ -1372,8 +1397,10 @@ describe('test valkeyrie', async () => {
           )
           .commit()
       },
-      TypeError,
-      'Too many mutations (max 1000)',
+      {
+        name: 'TypeError',
+        message: 'Too many mutations (max 1000)',
+      },
     )
   })
 
@@ -1397,8 +1424,10 @@ describe('test valkeyrie', async () => {
         }
         await atomic.commit()
       },
-      TypeError,
-      'Total mutation size too large (max 819200 bytes)',
+      {
+        name: 'TypeError',
+        message: 'Total mutation size too large (max 819200 bytes)',
+      },
     )
   })
 
@@ -1410,11 +1439,10 @@ describe('test valkeyrie', async () => {
     for (const key of keys) {
       atomic.set(key, 'foo')
     }
-    await assert.rejects(
-      () => atomic.commit(),
-      TypeError,
-      'Total key size too large (max 81920 bytes)',
-    )
+    await assert.rejects(() => atomic.commit(), {
+      name: 'TypeError',
+      message: 'Total key size too large (max 81920 bytes)',
+    })
   })
 
   await dbTest('keys must be arrays', async (db) => {
@@ -2263,30 +2291,33 @@ describe('test valkeyrie', async () => {
   //   },
   // })
 
-  // Deno.test({
-  //   permissions: { read: true },
-  // }, async function kvExplicitResourceManagement() {
-  //   let kv2: Deno.Kv
+  await test('Valkeyrie explicit resource management', async () => {
+    let db2: Valkeyrie
 
-  //   {
-  //     using kv = await Deno.openKv(':memory:')
-  //     kv2 = kv
+    {
+      await using db = await Valkeyrie.open()
+      db2 = db
 
-  //     const res = await kv.get(['a'])
-  //     assertEquals(res.versionstamp, null)
-  //   }
+      const res = await db.get(['a'])
+      assert.strictEqual(res.versionstamp, null)
+    }
 
-  //   await assertRejects(() => kv2.get(['a']), Deno.errors.BadResource)
-  // })
+    await assert.rejects(() => db2.get(['a']), {
+      name: 'Error',
+      message: 'Database is closed',
+    })
+  })
 
-  // Deno.test({
-  //   permissions: { read: true },
-  // }, async function kvExplicitResourceManagementManualClose() {
-  //   using kv = await Deno.openKv(':memory:')
-  //   kv.close()
-  //   await assertRejects(() => kv.get(['a']), Deno.errors.BadResource)
-  //   // calling [Symbol.dispose] after manual close is a no-op
-  // })
+  await test('Valkeyrie explicit resource management manual close', async () => {
+    using db = await Valkeyrie.open()
+    await db.close()
+
+    await assert.rejects(() => db.get(['a']), {
+      name: 'Error',
+      message: 'Database is closed',
+    })
+    // calling [Symbol.dispose] after manual close is a no-op
+  })
 
   // dbTest('key watch', async (db) => {
   //   const changeHistory: Deno.KvEntryMaybe<number>[] = []
@@ -2424,6 +2455,52 @@ describe('test valkeyrie', async () => {
       limitedEntries.length,
       500,
       'Should respect the specified limit',
+    )
+  })
+
+  await test(`works with 'await using' on db instance`, async () => {
+    let _db: Valkeyrie
+
+    {
+      await using db = await Valkeyrie.open()
+      _db = db
+      await db.set(['a'], 1)
+      assert.strictEqual((await db.get(['a'])).value, 1)
+    }
+
+    await assert.rejects(
+      async () => await _db.close(),
+      Error,
+      'database is not open',
+    )
+  })
+
+  await test(`works with 'await using' on list method`, async () => {
+    let _db: Valkeyrie
+
+    {
+      const db = await Valkeyrie.open()
+      _db = db
+
+      await db.set(['a', '1'], 1)
+      await db.set(['a', '2'], 2)
+      await db.set(['a', '3'], 3)
+
+      await using entries = db.list({ prefix: ['a'] })
+
+      let count = 0
+      for await (const entry of entries) {
+        count++
+        assert.strictEqual(entry.value, count)
+      }
+
+      assert.strictEqual(count, 3)
+    }
+
+    await assert.rejects(
+      async () => await _db.close(),
+      Error,
+      'database is not open',
     )
   })
 })
