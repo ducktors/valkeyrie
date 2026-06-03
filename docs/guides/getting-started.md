@@ -58,6 +58,10 @@ const db = await Valkeyrie.open();
 await db.close();
 ```
 
+### Custom Driver
+
+Advanced users can supply a fully custom storage backend using `Valkeyrie.openWithDriver()` (or the `driverFn` option in factory methods). The `Driver` type and `defineDriver` helper for implementing a backend are exported from `'valkeyrie/driver'`. See the [API Reference](../api/api-reference.md#valkeyrieopenwithdriver) for details. For the built-in SQLite backend, `Valkeyrie.open(path)` is all you need.
+
 ### File-Based Database
 
 For persistent data that survives restarts:

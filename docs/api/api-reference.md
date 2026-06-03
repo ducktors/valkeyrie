@@ -87,6 +87,43 @@ const db3 = await Valkeyrie.open('./temp.db', {
 
 ---
 
+#### `Valkeyrie.openWithDriver()`
+
+Open a database using a custom storage driver function. Use this when you need to supply a custom or pre-configured backend instead of a plain file path.
+
+```typescript
+static async openWithDriver(
+  driverFn: (serializer?: () => Serializer) => Promise<Driver>,
+  options?: {
+    serializer?: () => Serializer;
+    destroyOnClose?: boolean;
+  }
+): Promise<Valkeyrie>
+```
+
+**Parameters:**
+- `driverFn` - A function that receives the resolved serializer factory and returns a `Promise<Driver>`. Implement the `Driver` interface (import `Driver` type and `defineDriver` helper from `'valkeyrie/driver'`) for your own backend.
+- `options` - Configuration options
+  - `serializer` - Custom serializer factory (default: V8 serializer). Passed through to `driverFn`.
+  - `destroyOnClose` - Delete the underlying storage on close (default: `false`)
+
+**Returns:** `Promise<Valkeyrie>`
+
+> For the built-in SQLite backend use `Valkeyrie.open(path)` instead — `openWithDriver` is for custom backends only.
+
+**Example:**
+```typescript
+import { Valkeyrie } from 'valkeyrie';
+// `Driver` type and `defineDriver` helper are available from 'valkeyrie/driver'
+
+// `createMyDriver` returns an object implementing the Driver interface
+const db = await Valkeyrie.openWithDriver(
+  async (serializer) => createMyDriver(serializer),
+);
+```
+
+---
+
 #### `Valkeyrie.from()`
 
 Create and populate a database from a synchronous iterable.
@@ -100,14 +137,15 @@ static async from<T>(
 
 **Parameters:**
 - `iterable` - Array, Set, Map, or any iterable
-- `options` - Configuration options
+- `options` - Configuration options. Supplying `driverFn` uses a custom driver and takes precedence over `path`.
 
 **FromOptions:**
 ```typescript
 interface FromOptions<T> {
   prefix: Key;                                    // Required
   keyProperty: keyof T | ((item: T) => KeyPart);  // Required
-  path?: string;
+  path?: string;                                  // defaults to in-memory if neither path nor driverFn are given
+  driverFn?: (serializer?: () => Serializer) => Promise<Driver>; // takes precedence over path
   serializer?: () => Serializer;
   destroyOnClose?: boolean;
   expireIn?: number;
@@ -146,7 +184,7 @@ static async fromAsync<T>(
 ): Promise<Valkeyrie>
 ```
 
-**Parameters:** Same as `from()`
+**Parameters:** Same as `from()`. Supplying `driverFn` in options uses a custom driver and takes precedence over `path`.
 
 **Returns:** `Promise<Valkeyrie>`
 

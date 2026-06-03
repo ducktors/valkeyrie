@@ -166,8 +166,22 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
   }
 
   /**
-   * Opens a new Valkeyrie database instance
-   * @param path Optional path to the database file (defaults to in-memory)
+   * Opens a new Valkeyrie database instance backed by a custom driver.
+   *
+   * Use this instead of {@link Valkeyrie.open} when you want to supply your own
+   * storage backend. The driver function receives the configured serializer
+   * (if any) and must resolve to a {@link Driver}. For the built-in SQLite
+   * backend, prefer {@link Valkeyrie.open}.
+   *
+   * @example
+   * ```typescript
+   * // `createMyDriver` returns an object implementing the Driver interface
+   * const db = await Valkeyrie.openWithDriver(
+   *   async (serializer) => createMyDriver(serializer),
+   * )
+   * ```
+   *
+   * @param driverFn Function that creates the driver, optionally using the serializer
    * @param options Optional configuration options
    * @returns A new Valkeyrie instance
    */

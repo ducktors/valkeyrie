@@ -7,7 +7,11 @@ import { describe, test } from 'node:test'
 import { setTimeout } from 'node:timers/promises'
 import { inspect } from 'node:util'
 import type { StandardSchemaV1 } from '@standard-schema/spec'
+import type { Driver } from '../src/driver.ts'
 import { KvU64 } from '../src/kv-u64.ts'
+import { jsonSerializer } from '../src/serializers/json.ts'
+import type { Serializer } from '../src/serializers/serializer.ts'
+import { sqliteDriver } from '../src/sqlite-driver.ts'
 import { ValkeyrieBuilder } from '../src/valkeyrie-builder.ts'
 import {
   AtomicOperation,
@@ -16,6 +20,39 @@ import {
   type Mutation,
   Valkeyrie,
 } from '../src/valkeyrie.ts'
+
+/**
+ * A spy that wraps the built-in in-memory SQLite driver so tests can assert the
+ * supplied `driverFn` was actually invoked and used. Mirrors how a consumer
+ * would provide a custom backend, without reimplementing the full Driver contract.
+ */
+type DriverSpy = {
+  created: number
+  serializerSeen: boolean
+  setCalls: number
+  getCalls: number
+}
+
+function createSpyDriverFn(
+  spy: DriverSpy,
+): (serializer?: () => Serializer) => Promise<Driver> {
+  return async (serializer?: () => Serializer): Promise<Driver> => {
+    spy.created += 1
+    spy.serializerSeen = serializer !== undefined
+    const inner = await sqliteDriver(':memory:', serializer)
+    return {
+      ...inner,
+      set: (...args: Parameters<Driver['set']>) => {
+        spy.setCalls += 1
+        return inner.set(...args)
+      },
+      get: (...args: Parameters<Driver['get']>) => {
+        spy.getCalls += 1
+        return inner.get(...args)
+      },
+    }
+  }
+}
 
 describe('test valkeyrie', async () => {
   async function dbTest(
@@ -3043,6 +3080,133 @@ describe('test valkeyrie', async () => {
         items.push(item)
       }
       assert.strictEqual(items.length, 0)
+    } finally {
+      await db.close()
+    }
+  })
+
+  await test('openWithDriver() opens a working database', async () => {
+    const spy: DriverSpy = {
+      created: 0,
+      serializerSeen: false,
+      setCalls: 0,
+      getCalls: 0,
+    }
+
+    const db = await Valkeyrie.openWithDriver(createSpyDriverFn(spy))
+
+    try {
+      await db.set(['greeting'], 'hello')
+      const entry = await db.get(['greeting'])
+      assert.strictEqual(entry.value, 'hello')
+      // The provided driver function was invoked and actually used
+      assert.strictEqual(spy.created, 1)
+      assert.ok(spy.setCalls > 0)
+      assert.ok(spy.getCalls > 0)
+    } finally {
+      await db.close()
+    }
+  })
+
+  await test('openWithDriver() passes the serializer to the driver function', async () => {
+    const spy: DriverSpy = {
+      created: 0,
+      serializerSeen: false,
+      setCalls: 0,
+      getCalls: 0,
+    }
+
+    const db = await Valkeyrie.openWithDriver(createSpyDriverFn(spy), {
+      serializer: jsonSerializer,
+    })
+
+    try {
+      assert.strictEqual(spy.serializerSeen, true)
+      await db.set(['k'], { a: 1 })
+      const entry = await db.get(['k'])
+      assert.deepEqual(entry.value, { a: 1 })
+    } finally {
+      await db.close()
+    }
+  })
+
+  await test('from() uses driverFn when provided', async () => {
+    const spy: DriverSpy = {
+      created: 0,
+      serializerSeen: false,
+      setCalls: 0,
+      getCalls: 0,
+    }
+
+    const items = [{ id: 1, value: 'a' }]
+    const db = await Valkeyrie.from(items, {
+      prefix: ['items'],
+      keyProperty: 'id',
+      driverFn: createSpyDriverFn(spy),
+    })
+
+    try {
+      assert.strictEqual(spy.created, 1)
+      const item = await db.get(['items', 1])
+      assert.deepEqual(item.value, { id: 1, value: 'a' })
+    } finally {
+      await db.close()
+    }
+  })
+
+  await test('from() with both path and driverFn uses driverFn and ignores path', async () => {
+    const spy: DriverSpy = {
+      created: 0,
+      serializerSeen: false,
+      setCalls: 0,
+      getCalls: 0,
+    }
+    const testPath = join(tmpdir(), `test-driverfn-${randomUUID()}.db`)
+
+    const items = [{ id: 1, value: 'a' }]
+    const db = await Valkeyrie.from(items, {
+      prefix: ['items'],
+      keyProperty: 'id',
+      path: testPath,
+      driverFn: createSpyDriverFn(spy),
+    })
+
+    try {
+      assert.strictEqual(spy.created, 1)
+      const item = await db.get(['items', 1])
+      assert.deepEqual(item.value, { id: 1, value: 'a' })
+      // driverFn takes precedence: the file at `path` is never created
+      await assert.rejects(access(testPath))
+    } finally {
+      await db.close()
+    }
+  })
+
+  await test('fromAsync() with both path and driverFn uses driverFn and ignores path', async () => {
+    const spy: DriverSpy = {
+      created: 0,
+      serializerSeen: false,
+      setCalls: 0,
+      getCalls: 0,
+    }
+    const testPath = join(tmpdir(), `test-driverfn-async-${randomUUID()}.db`)
+
+    async function* generate() {
+      yield { id: 1, value: 'a' }
+    }
+
+    const db = await Valkeyrie.fromAsync(generate(), {
+      prefix: ['items'],
+      keyProperty: 'id',
+      path: testPath,
+      driverFn: createSpyDriverFn(spy),
+    })
+
+    try {
+      assert.strictEqual(spy.created, 1)
+      const item = await db.get(['items', 1])
+      assert.deepEqual(item.value, { id: 1, value: 'a' })
+      await assert.rejects(access(testPath))
     } finally {
       await db.close()
     }

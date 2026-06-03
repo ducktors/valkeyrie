@@ -78,8 +78,15 @@ export class ValkeyrieBuilder<
   }
 
   /**
-   * Opens a new Valkeyrie database instance with registered schemas.
-   * @param path Optional path to the database file (defaults to in-memory)
+   * Opens a new Valkeyrie database instance backed by a custom driver,
+   * with registered schemas.
+   *
+   * Use this instead of {@link ValkeyrieBuilder.open} to supply your own storage
+   * backend. The driver function receives the configured serializer (if any) and
+   * must resolve to a {@link Driver}. For the built-in SQLite backend, prefer
+   * {@link ValkeyrieBuilder.open}.
+   *
+   * @param driverFn Function that creates the driver, optionally using the serializer
    * @param options Optional configuration options
    * @returns A new Valkeyrie instance with schema validation and type inference
    */

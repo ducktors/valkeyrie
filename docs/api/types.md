@@ -233,7 +233,8 @@ Same as `Check` but used in the atomic operation builder.
 interface FromOptions<T> {
   prefix: Key;
   keyProperty: keyof T | ((item: T) => KeyPart);
-  path?: string;
+  path?: string;                                                   // defaults to in-memory if neither path nor driverFn are given
+  driverFn?: (serializer?: () => Serializer) => Promise<Driver>;  // takes precedence over path
   serializer?: () => Serializer;
   destroyOnClose?: boolean;
   expireIn?: number;

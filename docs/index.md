@@ -38,7 +38,7 @@ features:
 
   - icon: 🔌
     title: Pluggable Storage Drivers
-    details: Built on SQLite with a driver architecture designed for extensibility. More drivers coming soon.
+    details: Built on SQLite with a driver architecture designed for extensibility. Custom drivers are already accessible via the public `openWithDriver()` API and the `driverFn` option in factory methods. More built-in drivers coming soon.
 
   - icon: 🔒
     title: Multi-instance Safe

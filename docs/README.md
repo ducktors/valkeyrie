@@ -29,6 +29,7 @@ Feature-specific guides for different use cases:
   - Streaming data with `fromAsync()`
   - Progress tracking and error handling
   - Real-world import/migration examples
+  - Custom drivers via `openWithDriver()` and the `driverFn` option
 
 - **[Serializers](./guides/serializers.md)**
   - Choosing the right serializer
