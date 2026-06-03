@@ -1,6 +1,8 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec'
+import type { Driver } from './driver.ts'
 import { SchemaRegistry } from './schema-registry.ts'
 import type { Serializer } from './serializers/serializer.ts'
+import { sqliteDriver } from './sqlite-driver.ts'
 import { kFrom, kFromAsync, kOpen } from './symbols.ts'
 import type {
   SchemaRegistryEntry,
@@ -69,7 +71,27 @@ export class ValkeyrieBuilder<
     } = {},
   ): Promise<Valkeyrie<TRegistry>> {
     return Valkeyrie[kOpen](
-      path,
+      (serializer?: () => Serializer) => sqliteDriver(path, serializer),
+      options,
+      this.schemaRegistry,
+    ) as unknown as Promise<Valkeyrie<TRegistry>>
+  }
+
+  /**
+   * Opens a new Valkeyrie database instance with registered schemas.
+   * @param path Optional path to the database file (defaults to in-memory)
+   * @param options Optional configuration options
+   * @returns A new Valkeyrie instance with schema validation and type inference
+   */
+  async openWithDriver(
+    driverFn: (serializer?: () => Serializer) => Promise<Driver>,
+    options: {
+      serializer?: () => Serializer
+      destroyOnClose?: boolean
+    } = {},
+  ): Promise<Valkeyrie<TRegistry>> {
+    return Valkeyrie[kOpen](
+      driverFn,
       options,
       this.schemaRegistry,
     ) as unknown as Promise<Valkeyrie<TRegistry>>

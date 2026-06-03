@@ -55,8 +55,10 @@ export interface FromOptions<T> {
   prefix: Key
   /** Property name or function to extract the key part from each item */
   keyProperty: keyof T | ((item: T) => KeyPart)
-  /** Optional path to the database file (defaults to in-memory) */
+  /** Optional path to the database file (defaults to in-memory if neither path nor driverFn are given) */
   path?: string
+  /** Optional function to provide a driver; takes precedence over path */
+  driverFn?: (serializer?: () => Serializer) => Promise<Driver>
   /** Optional custom serializer */
   serializer?: () => Serializer
   /** Optional destroyOnClose flag (default: false) */
@@ -157,7 +159,26 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
       destroyOnClose?: boolean
     } = {},
   ): Promise<Valkeyrie> {
-    return Valkeyrie[kOpen](path, options, undefined)
+    return Valkeyrie.openWithDriver(
+      (serializer?: () => Serializer) => sqliteDriver(path, serializer),
+      options,
+    )
+  }
+
+  /**
+   * Opens a new Valkeyrie database instance
+   * @param path Optional path to the database file (defaults to in-memory)
+   * @param options Optional configuration options
+   * @returns A new Valkeyrie instance
+   */
+  public static async openWithDriver(
+    driverFn: (serializer?: () => Serializer) => Promise<Driver>,
+    options: {
+      serializer?: () => Serializer
+      destroyOnClose?: boolean
+    } = {},
+  ): Promise<Valkeyrie> {
+    return Valkeyrie[kOpen](driverFn, options, undefined)
   }
 
   /**
@@ -165,7 +186,7 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
    * Used by ValkeyrieBuilder.
    */
   static async [kOpen](
-    path?: string,
+    driverFn: (serializer?: () => Serializer) => Promise<Driver>,
     options: {
       serializer?: () => Serializer
       destroyOnClose?: boolean
@@ -183,7 +204,7 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
       constructorOptions.schemaRegistry = schemaRegistry
     }
     const db = new Valkeyrie(
-      await sqliteDriver(path, options.serializer),
+      await driverFn(options.serializer),
       constructorOptions,
       kValkeyrie,
     )
@@ -264,8 +285,14 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
     if (options.destroyOnClose !== undefined) {
       openOptions.destroyOnClose = options.destroyOnClose
     }
+    let driverFn = options.driverFn
+    if (driverFn === undefined) {
+      driverFn = (serializer?: () => Serializer) =>
+        sqliteDriver(options.path, serializer)
+    }
+
     const db: Valkeyrie = await Valkeyrie[kOpen](
-      options.path,
+      driverFn,
       openOptions,
       schemaRegistry,
     )
@@ -392,8 +419,14 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
     if (options.destroyOnClose !== undefined) {
       openOptions.destroyOnClose = options.destroyOnClose
     }
+    let driverFn = options.driverFn
+    if (driverFn === undefined) {
+      driverFn = (serializer?: () => Serializer) =>
+        sqliteDriver(options.path, serializer)
+    }
+
     const db: Valkeyrie = await Valkeyrie[kOpen](
-      options.path,
+      driverFn,
       openOptions,
       schemaRegistry,
     )
