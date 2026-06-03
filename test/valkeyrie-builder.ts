@@ -161,12 +161,12 @@ describe('ValkeyrieBuilder', () => {
     })
   })
 
-  describe('openWithDriver() Method', () => {
+  describe('open() with a driver function', () => {
     test('returns a working Valkeyrie instance from a custom driver', async () => {
       const builder = new ValkeyrieBuilder()
       const spy: DriverSpy = { created: 0 }
 
-      const db = await builder.openWithDriver(createSpyDriverFn(spy))
+      const db = await builder.open(createSpyDriverFn(spy))
 
       assert.ok(db instanceof Valkeyrie)
       assert.strictEqual(spy.created, 1)
@@ -182,7 +182,7 @@ describe('ValkeyrieBuilder', () => {
       builder.withSchema(['users', '*'], schema)
       const spy: DriverSpy = { created: 0 }
 
-      const db = await builder.openWithDriver(createSpyDriverFn(spy))
+      const db = await builder.open(createSpyDriverFn(spy))
 
       assert.ok(db instanceof Valkeyrie)
       assert.strictEqual(spy.created, 1)

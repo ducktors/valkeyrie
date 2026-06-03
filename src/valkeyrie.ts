@@ -48,6 +48,13 @@ interface SetOptions {
 }
 
 /**
+ * Factory that creates a storage {@link Driver}, optionally using the configured
+ * serializer. Pass one to {@link Valkeyrie.open} (or via `FromOptions.driverFn`)
+ * to back a database with a custom storage engine instead of the built-in SQLite.
+ */
+export type DriverFactory = (serializer?: () => Serializer) => Promise<Driver>
+
+/**
  * Options for creating a Valkeyrie database from an iterable.
  */
 export interface FromOptions<T> {
@@ -58,7 +65,7 @@ export interface FromOptions<T> {
   /** Optional path to the database file (defaults to in-memory if neither path nor driverFn are given) */
   path?: string
   /** Optional function to provide a driver; takes precedence over path */
-  driverFn?: (serializer?: () => Serializer) => Promise<Driver>
+  driverFn?: DriverFactory
   /** Optional custom serializer */
   serializer?: () => Serializer
   /** Optional destroyOnClose flag (default: false) */
@@ -147,51 +154,58 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
   }
 
   /**
-   * Opens a new Valkeyrie database instance
+   * Opens a new Valkeyrie database instance.
+   *
+   * Accepts either a file path for the built-in SQLite backend, or a
+   * {@link DriverFactory} to supply a custom storage backend. Omit the argument
+   * for an in-memory SQLite database.
+   *
+   * @example
+   * ```typescript
+   * // Built-in SQLite (in-memory or file path)
+   * const memory = await Valkeyrie.open()
+   * const file = await Valkeyrie.open('./data.db')
+   *
+   * // Custom backend: `createMyDriver` returns an object implementing Driver
+   * const custom = await Valkeyrie.open(async (serializer) => createMyDriver(serializer))
+   * ```
+   *
    * @param path Optional path to the database file (defaults to in-memory)
    * @param options Optional configuration options
    * @returns A new Valkeyrie instance
    */
   public static async open(
     path?: string,
-    options: {
+    options?: {
       serializer?: () => Serializer
       destroyOnClose?: boolean
-    } = {},
-  ): Promise<Valkeyrie> {
-    return Valkeyrie.openWithDriver(
-      (serializer?: () => Serializer) => sqliteDriver(path, serializer),
-      options,
-    )
-  }
-
+    },
+  ): Promise<Valkeyrie>
   /**
    * Opens a new Valkeyrie database instance backed by a custom driver.
-   *
-   * Use this instead of {@link Valkeyrie.open} when you want to supply your own
-   * storage backend. The driver function receives the configured serializer
-   * (if any) and must resolve to a {@link Driver}. For the built-in SQLite
-   * backend, prefer {@link Valkeyrie.open}.
-   *
-   * @example
-   * ```typescript
-   * // `createMyDriver` returns an object implementing the Driver interface
-   * const db = await Valkeyrie.openWithDriver(
-   *   async (serializer) => createMyDriver(serializer),
-   * )
-   * ```
    *
    * @param driverFn Function that creates the driver, optionally using the serializer
    * @param options Optional configuration options
    * @returns A new Valkeyrie instance
    */
-  public static async openWithDriver(
-    driverFn: (serializer?: () => Serializer) => Promise<Driver>,
+  public static async open(
+    driverFn: DriverFactory,
+    options?: {
+      serializer?: () => Serializer
+      destroyOnClose?: boolean
+    },
+  ): Promise<Valkeyrie>
+  public static async open(
+    pathOrDriver?: string | DriverFactory,
     options: {
       serializer?: () => Serializer
       destroyOnClose?: boolean
     } = {},
   ): Promise<Valkeyrie> {
+    const driverFn: DriverFactory =
+      typeof pathOrDriver === 'function'
+        ? pathOrDriver
+        : (serializer) => sqliteDriver(pathOrDriver, serializer)
     return Valkeyrie[kOpen](driverFn, options, undefined)
   }
 
@@ -200,7 +214,7 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
    * Used by ValkeyrieBuilder.
    */
   static async [kOpen](
-    driverFn: (serializer?: () => Serializer) => Promise<Driver>,
+    driverFn: DriverFactory,
     options: {
       serializer?: () => Serializer
       destroyOnClose?: boolean

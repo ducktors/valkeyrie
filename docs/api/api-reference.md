@@ -50,11 +50,22 @@ const db = await Valkeyrie
 
 #### `Valkeyrie.open()`
 
-Open or create a database.
+Open or create a database. The first argument is either a file path for the
+built-in SQLite backend, or a driver factory function for a custom backend.
 
 ```typescript
+// Built-in SQLite backend (in-memory when path is omitted)
 static async open(
   path?: string,
+  options?: {
+    serializer?: () => Serializer;
+    destroyOnClose?: boolean;
+  }
+): Promise<Valkeyrie>
+
+// Custom backend
+static async open(
+  driverFn: DriverFactory, // (serializer?: () => Serializer) => Promise<Driver>
   options?: {
     serializer?: () => Serializer;
     destroyOnClose?: boolean;
@@ -64,9 +75,10 @@ static async open(
 
 **Parameters:**
 - `path` - Optional file path. Omit for in-memory database
+- `driverFn` - A `DriverFactory`: a function that receives the resolved serializer factory and returns a `Promise<Driver>`. Implement the `Driver` interface (import the `Driver` type and `defineDriver` helper from `'valkeyrie/driver'`) for your own backend.
 - `options` - Configuration options
-  - `serializer` - Custom serializer (default: V8 serializer)
-  - `destroyOnClose` - Delete database file on close (default: `false`)
+  - `serializer` - Custom serializer (default: V8 serializer). Passed through to `driverFn` when a custom backend is used.
+  - `destroyOnClose` - Delete the underlying storage on close (default: `false`)
 
 **Returns:** `Promise<Valkeyrie>`
 
@@ -83,41 +95,10 @@ const db3 = await Valkeyrie.open('./temp.db', {
   serializer: jsonSerializer,
   destroyOnClose: true
 });
-```
 
----
-
-#### `Valkeyrie.openWithDriver()`
-
-Open a database using a custom storage driver function. Use this when you need to supply a custom or pre-configured backend instead of a plain file path.
-
-```typescript
-static async openWithDriver(
-  driverFn: (serializer?: () => Serializer) => Promise<Driver>,
-  options?: {
-    serializer?: () => Serializer;
-    destroyOnClose?: boolean;
-  }
-): Promise<Valkeyrie>
-```
-
-**Parameters:**
-- `driverFn` - A function that receives the resolved serializer factory and returns a `Promise<Driver>`. Implement the `Driver` interface (import `Driver` type and `defineDriver` helper from `'valkeyrie/driver'`) for your own backend.
-- `options` - Configuration options
-  - `serializer` - Custom serializer factory (default: V8 serializer). Passed through to `driverFn`.
-  - `destroyOnClose` - Delete the underlying storage on close (default: `false`)
-
-**Returns:** `Promise<Valkeyrie>`
-
-> For the built-in SQLite backend use `Valkeyrie.open(path)` instead — `openWithDriver` is for custom backends only.
-
-**Example:**
-```typescript
-import { Valkeyrie } from 'valkeyrie';
-// `Driver` type and `defineDriver` helper are available from 'valkeyrie/driver'
-
-// `createMyDriver` returns an object implementing the Driver interface
-const db = await Valkeyrie.openWithDriver(
+// Custom backend — `createMyDriver` returns an object implementing the Driver
+// interface (the `Driver` type and `defineDriver` helper live in 'valkeyrie/driver')
+const db4 = await Valkeyrie.open(
   async (serializer) => createMyDriver(serializer),
 );
 ```

@@ -3085,7 +3085,7 @@ describe('test valkeyrie', async () => {
     }
   })
 
-  await test('openWithDriver() opens a working database', async () => {
+  await test('open() with a driver function opens a working database', async () => {
     const spy: DriverSpy = {
       created: 0,
       serializerSeen: false,
@@ -3093,7 +3093,7 @@ describe('test valkeyrie', async () => {
       getCalls: 0,
     }
 
-    const db = await Valkeyrie.openWithDriver(createSpyDriverFn(spy))
+    const db = await Valkeyrie.open(createSpyDriverFn(spy))
 
     try {
       await db.set(['greeting'], 'hello')
@@ -3108,7 +3108,20 @@ describe('test valkeyrie', async () => {
     }
   })
 
-  await test('openWithDriver() passes the serializer to the driver function', async () => {
+  await test('open() with a string path still uses the built-in driver', async () => {
+    // Overloading open() to also accept a driver function must not break the path form
+    const db = await Valkeyrie.open(':memory:')
+
+    try {
+      await db.set(['greeting'], 'hello')
+      const entry = await db.get(['greeting'])
+      assert.strictEqual(entry.value, 'hello')
+    } finally {
+      await db.close()
+    }
+  })
+
+  await test('open() with a driver function passes the serializer to it', async () => {
     const spy: DriverSpy = {
       created: 0,
       serializerSeen: false,
@@ -3116,7 +3129,7 @@ describe('test valkeyrie', async () => {
       getCalls: 0,
     }
 
-    const db = await Valkeyrie.openWithDriver(createSpyDriverFn(spy), {
+    const db = await Valkeyrie.open(createSpyDriverFn(spy), {
       serializer: jsonSerializer,
     })
 
