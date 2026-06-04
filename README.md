@@ -33,7 +33,7 @@ This is still a work in progress, but the API and everything already implemented
 - **Automatic type inference** - Full TypeScript support with schema-based type inference across all operations
 - **Atomic operations** - Perform multiple operations in a single transaction with optimistic locking
 - **Real-time updates** - Watch keys for changes with the `watch()` API
-- **Pluggable storage drivers** - Currently SQLite-based, with support for more drivers coming soon
+- **Pluggable storage drivers** - Currently SQLite-based, with support for more drivers coming soon. Custom drivers are reachable today by passing a driver function to the public `open()` API and via the `driverFn` option in factory methods.
 - **Rich data type support** - Store objects, arrays, dates, binary data, Maps, Sets, and more
 - **Hierarchical keys** - Organize data with multi-part keys for efficient querying
 - **Efficient querying** - List data with prefix and range queries

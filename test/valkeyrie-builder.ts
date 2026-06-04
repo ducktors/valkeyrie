@@ -1,6 +1,13 @@
 import assert from 'node:assert'
+import { randomUUID } from 'node:crypto'
+import { access } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, test } from 'node:test'
 import type { StandardSchemaV1 } from '@standard-schema/spec'
+import type { Driver } from '../src/driver.ts'
+import type { Serializer } from '../src/serializers/serializer.ts'
+import { sqliteDriver } from '../src/sqlite-driver.ts'
 import { ValkeyrieBuilder } from '../src/valkeyrie-builder.ts'
 import { Valkeyrie } from '../src/valkeyrie.ts'
 
@@ -17,6 +24,17 @@ const createMockSchema = (name: string): StandardSchemaV1 =>
     },
     _name: name,
   }) as unknown as StandardSchemaV1
+
+// Spy wrapping the built-in in-memory driver, used to verify a custom
+// driverFn is actually invoked through the builder.
+type DriverSpy = { created: number }
+
+const createSpyDriverFn =
+  (spy: DriverSpy) =>
+  async (serializer?: () => Serializer): Promise<Driver> => {
+    spy.created += 1
+    return sqliteDriver(':memory:', serializer)
+  }
 
 describe('ValkeyrieBuilder', () => {
   describe('Builder Construction', () => {
@@ -143,6 +161,35 @@ describe('ValkeyrieBuilder', () => {
     })
   })
 
+  describe('open() with a driver function', () => {
+    test('returns a working Valkeyrie instance from a custom driver', async () => {
+      const builder = new ValkeyrieBuilder()
+      const spy: DriverSpy = { created: 0 }
+
+      const db = await builder.open(createSpyDriverFn(spy))
+
+      assert.ok(db instanceof Valkeyrie)
+      assert.strictEqual(spy.created, 1)
+      await db.set(['k'], 'v')
+      const entry = await db.get(['k'])
+      assert.strictEqual(entry.value, 'v')
+      await db.close()
+    })
+
+    test('applies registered schemas through the custom driver', async () => {
+      const builder = new ValkeyrieBuilder()
+      const schema = createMockSchema('user')
+      builder.withSchema(['users', '*'], schema)
+      const spy: DriverSpy = { created: 0 }
+
+      const db = await builder.open(createSpyDriverFn(spy))
+
+      assert.ok(db instanceof Valkeyrie)
+      assert.strictEqual(spy.created, 1)
+      await db.close()
+    })
+  })
+
   describe('from() Method', () => {
     test('returns a Valkeyrie instance', async () => {
       const builder = new ValkeyrieBuilder()
@@ -211,6 +258,26 @@ describe('ValkeyrieBuilder', () => {
       })
 
       assert.ok(db instanceof Valkeyrie)
+      await db.close()
+    })
+
+    test('uses driverFn over path when both are provided', async () => {
+      const builder = new ValkeyrieBuilder()
+      const spy: DriverSpy = { created: 0 }
+      const testPath = join(tmpdir(), `builder-from-${randomUUID()}.db`)
+
+      const db = await builder.from([{ id: 1, value: 'a' }], {
+        prefix: ['items'],
+        keyProperty: 'id',
+        path: testPath,
+        driverFn: createSpyDriverFn(spy),
+      })
+
+      assert.ok(db instanceof Valkeyrie)
+      assert.strictEqual(spy.created, 1)
+      const item = await db.get(['items', 1])
+      assert.deepEqual(item.value, { id: 1, value: 'a' })
+      await assert.rejects(access(testPath))
       await db.close()
     })
   })
@@ -298,6 +365,30 @@ describe('ValkeyrieBuilder', () => {
       })
 
       assert.ok(db instanceof Valkeyrie)
+      await db.close()
+    })
+
+    test('uses driverFn over path when both are provided', async () => {
+      const builder = new ValkeyrieBuilder()
+      const spy: DriverSpy = { created: 0 }
+      const testPath = join(tmpdir(), `builder-fromasync-${randomUUID()}.db`)
+
+      async function* generate() {
+        yield { id: 1, value: 'a' }
+      }
+
+      const db = await builder.fromAsync(generate(), {
+        prefix: ['items'],
+        keyProperty: 'id',
+        path: testPath,
+        driverFn: createSpyDriverFn(spy),
+      })
+
+      assert.ok(db instanceof Valkeyrie)
+      assert.strictEqual(spy.created, 1)
+      const item = await db.get(['items', 1])
+      assert.deepEqual(item.value, { id: 1, value: 'a' })
+      await assert.rejects(access(testPath))
       await db.close()
     })
   })
