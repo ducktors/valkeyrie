@@ -1,6 +1,6 @@
 {
   "name": "valkeyrie",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "description": "Type-safe key-value store with atomic transactions, Standard Schema validation and pluggable drivers.",
   "type": "module",
   "main": "dist/valkeyrie.js",
