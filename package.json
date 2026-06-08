@@ -78,7 +78,7 @@
   "packageManager": "pnpm@11.5.2",
   "scripts": {
     "build": "rimraf ./dist && tsc -p tsconfig.build.json",
-    "validate-exports": "validate-package-exports --check --verify --info",
+    "validate-exports": "validate-package-exports --check --info",
     "postbuild": "pnpm run validate-exports",
     "lint": "biome check src test",
     "fmt": "biome format src test",
@@ -115,7 +115,7 @@
     "typedoc-plugin-markdown": "^4.9.0",
     "typescript": "^5.8.2",
     "valibot": "^1.2.0",
-    "validate-package-exports": "^0.8.0",
+    "validate-package-exports": "^1.0.1",
     "vitepress": "^1.6.4",
     "zod": "^4.1.12"
   },

@@ -3,3 +3,10 @@ allowBuilds:
   cbor-extract: true
   esbuild: true
   msgpackr-extract: true
+
+overrides:
+  tar: "^7.5.11"
+  tmp: "^0.2.6"
+  ip-address: "^10.1.1"
+  vite: "^6.4.2"
+  esbuild: "^0.25.0"
