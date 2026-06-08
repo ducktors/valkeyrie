@@ -8,10 +8,13 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Don't cancel in-progress runs on the changesets release branch: rapid
+  # force-pushes would otherwise cancel the required checks before they
+  # complete on the final head SHA, leaving the release PR permanently BLOCKED.
+  cancel-in-progress: ${{ github.head_ref != 'changeset-release/main' }}
 
 env:
-  PNPM_VERSION: 10.20.0
+  PNPM_VERSION: 11.5.2
 
 permissions: read-all
 
