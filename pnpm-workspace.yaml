@@ -1,0 +1,5 @@
+allowBuilds:
+  '@biomejs/biome': true
+  cbor-extract: true
+  esbuild: true
+  msgpackr-extract: true

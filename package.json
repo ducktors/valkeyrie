@@ -75,7 +75,7 @@
     "type": "git",
     "url": "git+https://github.com/ducktors/valkeyrie.git"
   },
-  "packageManager": "pnpm@10.20.0",
+  "packageManager": "pnpm@11.5.2",
   "scripts": {
     "build": "rimraf ./dist && tsc -p tsconfig.build.json",
     "validate-exports": "validate-package-exports --check --verify --info",
@@ -122,14 +122,6 @@
   "files": [
     "dist"
   ],
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@biomejs/biome",
-      "cbor-extract",
-      "esbuild",
-      "msgpackr-extract"
-    ]
-  },
   "peerDependencies": {
     "bson": "^6.10.3",
     "cbor-x": "^1.6.0",
