@@ -109,3 +109,4 @@ docs/api/generated
 # TernJS port file
 .tern-port
 .DS_Store
+.omc
