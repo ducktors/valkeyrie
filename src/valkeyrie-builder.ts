@@ -1,12 +1,13 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec'
 import { SchemaRegistry } from './schema-registry.ts'
 import type { Serializer } from './serializers/serializer.ts'
+import { sqliteDriver } from './sqlite-driver.ts'
 import { kFrom, kFromAsync, kOpen } from './symbols.ts'
 import type {
   SchemaRegistryEntry,
   SchemaRegistry as SchemaRegistryType,
 } from './types/schema-registry-types.ts'
-import type { FromOptions, Key } from './valkeyrie.ts'
+import type { DriverFactory, FromOptions, Key } from './valkeyrie.ts'
 import { Valkeyrie } from './valkeyrie.ts'
 
 /**
@@ -57,19 +58,50 @@ export class ValkeyrieBuilder<
 
   /**
    * Opens a new Valkeyrie database instance with registered schemas.
+   *
+   * Accepts either a file path for the built-in SQLite backend, or a
+   * {@link DriverFactory} to supply a custom storage backend. Omit the argument
+   * for an in-memory SQLite database.
+   *
    * @param path Optional path to the database file (defaults to in-memory)
    * @param options Optional configuration options
    * @returns A new Valkeyrie instance with schema validation and type inference
    */
   async open(
     path?: string,
+    options?: {
+      serializer?: () => Serializer
+      destroyOnClose?: boolean
+    },
+  ): Promise<Valkeyrie<TRegistry>>
+  /**
+   * Opens a new Valkeyrie database instance backed by a custom driver,
+   * with registered schemas.
+   *
+   * @param driverFn Function that creates the driver, optionally using the serializer
+   * @param options Optional configuration options
+   * @returns A new Valkeyrie instance with schema validation and type inference
+   */
+  async open(
+    driverFn: DriverFactory,
+    options?: {
+      serializer?: () => Serializer
+      destroyOnClose?: boolean
+    },
+  ): Promise<Valkeyrie<TRegistry>>
+  async open(
+    pathOrDriver?: string | DriverFactory,
     options: {
       serializer?: () => Serializer
       destroyOnClose?: boolean
     } = {},
   ): Promise<Valkeyrie<TRegistry>> {
+    const driverFn: DriverFactory =
+      typeof pathOrDriver === 'function'
+        ? pathOrDriver
+        : (serializer) => sqliteDriver(pathOrDriver, serializer)
     return Valkeyrie[kOpen](
-      path,
+      driverFn,
       options,
       this.schemaRegistry,
     ) as unknown as Promise<Valkeyrie<TRegistry>>

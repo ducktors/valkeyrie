@@ -265,12 +265,29 @@ Both `from()` and `fromAsync()` accept the same options:
 | `prefix` | `Key` | **Yes** | Key prefix for all entries (e.g., `['users']`) |
 | `keyProperty` | `keyof T \| (item: T) => KeyPart` | **Yes** | Property name or function to extract key part |
 | `path` | `string` | No | Database file path. If omitted, creates in-memory database |
+| `driverFn` | `(serializer?: () => Serializer) => Promise<Driver>` | No | Custom driver function. Takes precedence over `path` |
 | `serializer` | `() => Serializer` | No | Custom serializer (default: v8 serializer) |
 | `destroyOnClose` | `boolean` | No | Destroy database file on close (default: `false`) |
 | `expireIn` | `number` | No | TTL for all entries in milliseconds |
 | `onProgress` | `(processed: number, total?: number) => void` | No | Progress callback. `total` is only provided for sync iterables with known size |
 | `onError` | `'stop' \| 'continue'` | No | Error handling strategy (default: `'stop'`) |
 | `onErrorCallback` | `(error: Error, item: T) => void` | No | Called for each error when `onError: 'continue'` |
+
+### Custom Drivers
+
+For advanced use cases, supply a custom driver via `driverFn` instead of `path`. The driver function receives the resolved serializer factory and returns a `Driver` instance. The `Driver` type and `defineDriver` helper for authoring your own backend are available from `'valkeyrie/driver'`. Omitting `driverFn` and using `path` (or neither) keeps the built-in SQLite driver.
+
+```typescript
+import { Valkeyrie } from 'valkeyrie';
+// `Driver` type and `defineDriver` helper from 'valkeyrie/driver'
+
+// `createMyDriver` returns an object implementing the Driver interface
+const db = await Valkeyrie.from(users, {
+  prefix: ['users'],
+  keyProperty: 'id',
+  driverFn: async (serializer) => createMyDriver(serializer),
+});
+```
 
 ## Key Extraction
 
