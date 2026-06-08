@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  PNPM_VERSION: 10.20.0
+  PNPM_VERSION: 11.5.2
   NPM_CONFIG_PROVENANCE: true
 
 jobs:
