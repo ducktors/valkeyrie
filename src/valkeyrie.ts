@@ -1243,7 +1243,7 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
   public async cleanup(): Promise<void> {
     this.throwIfClosed()
     const now = Date.now()
-    this.#driver.cleanup(now)
+    await this.#driver.cleanup(now)
   }
 
   public atomic(): AtomicOperation<TRegistry> {
