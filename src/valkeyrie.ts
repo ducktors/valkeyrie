@@ -236,7 +236,12 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
       constructorOptions,
       kValkeyrie,
     )
-    await db.cleanup()
+    try {
+      await db.cleanup()
+    } catch (error) {
+      await db.close()
+      throw error
+    }
     return db
   }
 

@@ -62,7 +62,7 @@ function createSpyDriverFn(
 type CleanupProbe = {
   calls: number
   settled: number
-  inner?: Driver
+  closed: number
 }
 
 function createSlowCleanupDriverFn(
@@ -71,9 +71,12 @@ function createSlowCleanupDriverFn(
 ): (serializer?: () => Serializer) => Promise<Driver> {
   return async (serializer?: () => Serializer): Promise<Driver> => {
     const inner = await sqliteDriver(':memory:', serializer)
-    probe.inner = inner
     return {
       ...inner,
+      close: async () => {
+        probe.closed += 1
+        await inner.close()
+      },
       cleanup: async (now: number) => {
         probe.calls += 1
         const call = probe.calls
@@ -3178,7 +3181,7 @@ describe('test valkeyrie', async () => {
   })
 
   await test('open() waits for the driver cleanup to settle', async () => {
-    const probe: CleanupProbe = { calls: 0, settled: 0 }
+    const probe: CleanupProbe = { calls: 0, settled: 0, closed: 0 }
 
     const db = await Valkeyrie.open(createSlowCleanupDriverFn(probe))
 
@@ -3191,7 +3194,7 @@ describe('test valkeyrie', async () => {
   })
 
   await test('cleanup() waits for the driver cleanup to settle', async () => {
-    const probe: CleanupProbe = { calls: 0, settled: 0 }
+    const probe: CleanupProbe = { calls: 0, settled: 0, closed: 0 }
 
     const db = await Valkeyrie.open(createSlowCleanupDriverFn(probe))
 
@@ -3205,21 +3208,18 @@ describe('test valkeyrie', async () => {
   })
 
   await test('open() rejects when the driver cleanup rejects', async () => {
-    const probe: CleanupProbe = { calls: 0, settled: 0 }
+    const probe: CleanupProbe = { calls: 0, settled: 0, closed: 0 }
 
-    try {
-      await assert.rejects(
-        Valkeyrie.open(createSlowCleanupDriverFn(probe, 1)),
-        /driver cleanup failed/,
-      )
-    } finally {
-      // open() never handed back a db, so close the underlying driver directly
-      await probe.inner?.close()
-    }
+    await assert.rejects(
+      Valkeyrie.open(createSlowCleanupDriverFn(probe, 1)),
+      /driver cleanup failed/,
+    )
+    // open() never hands back a db, so it must close the driver itself
+    assert.strictEqual(probe.closed, 1)
   })
 
   await test('cleanup() rejects when the driver cleanup rejects', async () => {
-    const probe: CleanupProbe = { calls: 0, settled: 0 }
+    const probe: CleanupProbe = { calls: 0, settled: 0, closed: 0 }
 
     const db = await Valkeyrie.open(createSlowCleanupDriverFn(probe, 2))
 
