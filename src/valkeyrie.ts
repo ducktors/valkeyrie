@@ -548,10 +548,18 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
     this.#isClosed = true
   }
 
-  /** Releases the driver without honouring destroyOnClose; used when open/from fails */
+  /**
+   * Best-effort release of the driver when open/from fails, without honouring
+   * destroyOnClose. Never throws, so the error that caused the failure surfaces.
+   */
   async #closeDriver(): Promise<void> {
-    await this.#driver.close()
-    this.#isClosed = true
+    try {
+      await this.#driver.close()
+    } catch {
+      // Ignore: the caller is already rethrowing the more useful original error
+    } finally {
+      this.#isClosed = true
+    }
   }
 
   /**

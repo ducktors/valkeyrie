@@ -58,13 +58,15 @@ function createSpyDriverFn(
  * Wraps the built-in in-memory SQLite driver so tests can observe its lifecycle.
  * `cleanup` settles only after a delay, like a network-backed driver would; when
  * `failOnCall` is set, that (1-based) cleanup call rejects instead. `close` and
- * `destroy` calls are counted.
+ * `destroy` calls are counted; with `failClose`, `close` still releases the
+ * inner driver but then rejects.
  */
 type DriverProbe = {
   calls: number
   settled: number
   closed: number
   destroyed: number
+  failClose?: boolean
 }
 
 function createProbeDriverFn(
@@ -78,6 +80,9 @@ function createProbeDriverFn(
       close: async () => {
         probe.closed += 1
         await inner.close()
+        if (probe.failClose) {
+          throw new Error('driver close failed')
+        }
       },
       destroy: async () => {
         probe.destroyed += 1
@@ -3305,6 +3310,44 @@ describe('test valkeyrie', async () => {
     )
     assert.strictEqual(probe.closed, 1)
     assert.strictEqual(probe.destroyed, 0)
+  })
+
+  await test('open() surfaces the cleanup error when closing the driver also fails', async () => {
+    const probe: DriverProbe = {
+      calls: 0,
+      settled: 0,
+      closed: 0,
+      destroyed: 0,
+      failClose: true,
+    }
+
+    await assert.rejects(
+      Valkeyrie.open(createProbeDriverFn(probe, 1)),
+      /driver cleanup failed/,
+    )
+    assert.strictEqual(probe.closed, 1)
+  })
+
+  await test('from() surfaces the population error when closing the driver also fails', async () => {
+    const probe: DriverProbe = {
+      calls: 0,
+      settled: 0,
+      closed: 0,
+      destroyed: 0,
+      failClose: true,
+    }
+    const items = [{ id: 1, value: 'valid' }, { value: 'missing id' }]
+
+    await assert.rejects(
+      Valkeyrie.from(items as { id: number; value: string }[], {
+        prefix: ['items'],
+        keyProperty: 'id',
+        onError: 'stop',
+        driverFn: createProbeDriverFn(probe),
+      }),
+      TypeError,
+    )
+    assert.strictEqual(probe.closed, 1)
   })
 
   await test('from() closes the driver when the prefix is invalid', async () => {
