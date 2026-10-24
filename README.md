@@ -12,7 +12,7 @@ Valkeyrie is a type-safe, key-value store for Node.js that combines runtime sche
 
 This is still a work in progress, but the API and everything already implemented is stable and ready for production.
 
-📚 **[Documentation](https://ducktors.github.io/Valkeyrie/)** | [Getting Started](https://ducktors.github.io/Valkeyrie/guides/getting-started) | [API Reference](https://ducktors.github.io/Valkeyrie/api/api-reference)
+📚 **[Documentation](https://ducktors.github.io/valkeyrie/)** | [Getting Started](https://ducktors.github.io/valkeyrie/guides/getting-started) | [API Reference](https://ducktors.github.io/valkeyrie/api/api-reference)
 
 ## Table of Contents
 
