@@ -770,6 +770,60 @@ describe(
       }
     })
 
+    await test('expiry follows the caller clock, not the server clock', async (t) => {
+      // The caller's clock is far behind the server's, as when a test
+      // freezes Date or when the server's clock runs ahead.
+      let now = Date.UTC(2000, 0, 1)
+      t.mock.method(Date, 'now', () => now)
+      const name = namespace()
+      const db = await Valkeyrie.open(
+        valkeyDriver({ client: connect(), namespace: name }),
+      )
+      try {
+        await db.set(['set'], 1, { expireIn: 60_000 })
+        const commit = await db
+          .atomic()
+          .set(['atomic'], 2, { expireIn: 60_000 })
+          .commit()
+        assert.strictEqual(commit.ok, true)
+        assert.strictEqual((await db.get(['set'])).value, 1)
+        assert.strictEqual((await db.get(['atomic'])).value, 2)
+
+        // Redis keeps each entry for the time left on the caller's clock.
+        const entryKeys = await admin.keysBuffer(`{${name}}:e:*`)
+        assert.strictEqual(entryKeys.length, 2)
+        for (const entryKey of entryKeys) {
+          const ttl = await admin.pttl(entryKey)
+          assert.ok(ttl > 50_000 && ttl <= 60_000, `TTL ${ttl}`)
+        }
+
+        now += 60_000
+        assert.strictEqual((await db.get(['set'])).value, null)
+        assert.strictEqual((await db.get(['atomic'])).value, null)
+        assert.deepStrictEqual(
+          await Array.fromAsync(db.list({ prefix: [] })),
+          [],
+        )
+      } finally {
+        await db.close()
+      }
+    })
+
+    await test('a set whose expiry time has passed deletes the entry', async () => {
+      const { driver, keys, members } = await openDriver()
+      const keyHash = hex(0x02, 0x6c, 0x00)
+      try {
+        await driver.set(keyHash, 1, VERSIONSTAMP)
+        await driver.set(keyHash, 2, VERSIONSTAMP, Date.now() - 1_000)
+        assert.strictEqual(await admin.exists(keys.entry(keyHash)), 0)
+        assert.deepStrictEqual(await members(keys.index), [])
+        assert.deepStrictEqual(await members(keys.expiry), [])
+        assert.strictEqual(await driver.get(keyHash, Date.now()), undefined)
+      } finally {
+        await driver.close()
+      }
+    })
+
     await test('cleanup removes expired entries and their index members', async () => {
       const { driver, keys, members } = await openDriver()
       const [expired1, expired2, evicted, live, later] = [1, 2, 3, 4, 5].map(

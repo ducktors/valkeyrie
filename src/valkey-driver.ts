@@ -207,30 +207,39 @@ export function valkeyDriver({
   const entryKey = (keyHash: string) => entryKeyOf(Buffer.from(keyHash, 'hex'))
 
   // Queues the commands that store `entry` under `keyHash`, or delete it. An
-  // entry with an expiry time gets the same time as its Redis TTL and as its
-  // score in the expiry index; an entry without one loses both.
+  // entry with an expiry time keeps that time as its score in the expiry
+  // index, and its Redis TTL is the time left on this process's clock, so a
+  // server clock that runs ahead does not expire it early. An entry that has
+  // already expired is deleted. An entry without an expiry time has neither.
   const write = (
     commands: ChainableCommander,
     keyHash: string,
     entry: Buffer | null,
   ): ChainableCommander => {
     const member = Buffer.from(keyHash, 'hex')
-    if (entry === null) {
-      return commands
+    const deleteEntry = () =>
+      commands
         .unlink(entryKeyOf(member))
         .zrem(indexKey, member)
         .zrem(expiryKey, member)
+    if (entry === null) {
+      return deleteEntry()
     }
     const expiresAt = Number(entry.readBigUInt64BE(VERSIONSTAMP_BYTES))
-    return expiresAt === 0
-      ? commands
-          .set(entryKeyOf(member), entry)
-          .zadd(indexKey, 0, member)
-          .zrem(expiryKey, member)
-      : commands
-          .set(entryKeyOf(member), entry, 'PXAT', expiresAt)
-          .zadd(indexKey, 0, member)
-          .zadd(expiryKey, expiresAt, member)
+    if (expiresAt === 0) {
+      return commands
+        .set(entryKeyOf(member), entry)
+        .zadd(indexKey, 0, member)
+        .zrem(expiryKey, member)
+    }
+    const timeToLive = expiresAt - Date.now()
+    if (timeToLive <= 0) {
+      return deleteEntry()
+    }
+    return commands
+      .set(entryKeyOf(member), entry, 'PX', timeToLive)
+      .zadd(indexKey, 0, member)
+      .zadd(expiryKey, expiresAt, member)
   }
 
   return async (serializerInit) => {

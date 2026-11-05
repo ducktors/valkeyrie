@@ -75,7 +75,7 @@ All keys of a namespace start with `{namespace}:`. The braces make a Redis [hash
 
 ## Expiry, Cleanup and Memory
 
-A value set with `expireIn` gets the same expiry time as its Redis TTL, so Redis deletes it on time by itself. Setting the key again without `expireIn` removes the TTL.
+A value set with `expireIn` also gets a Redis TTL, so Redis deletes it on time by itself. The TTL is the time left on your process's clock when the value is written, so a server clock that runs ahead does not expire values early. Valkeyrie still decides whether a value has expired by your process's clock. Setting the key again without `expireIn` removes the TTL.
 
 `db.cleanup()` removes expired keys from the two indexes. Valkeyrie runs it when it opens a database. A long-running process should also call it regularly, for example every minute. Several processes can run it at the same time.
 
@@ -99,4 +99,4 @@ One driver instance runs one commit at a time. Open one database per process and
 
 - Redis 6.2 or later, and Valkey 7.2 or later. The test suite runs on standalone Redis 6.2, Redis 7.2 and Valkey 8 servers.
 - Sentinel works through an ioredis `Redis` client, and cluster mode through an ioredis `Cluster` client, since a namespace stays on one shard. The test suite does not cover them yet.
-- The driver uses only core commands, which Redis and Valkey share, and no modules: `GET`, `MGET`, `SET` (with `PXAT`), `UNLINK`, `INCR`, `ZADD`, `ZREM`, `ZRANGEBYLEX`, `ZREVRANGEBYLEX`, `ZRANGEBYSCORE`, `WATCH`, `MULTI`, `EXEC` and `UNWATCH`.
+- The driver uses only core commands, which Redis and Valkey share, and no modules: `GET`, `MGET`, `SET` (with `PX`), `UNLINK`, `INCR`, `ZADD`, `ZREM`, `ZRANGEBYLEX`, `ZREVRANGEBYLEX`, `ZRANGEBYSCORE`, `WATCH`, `MULTI`, `EXEC` and `UNWATCH`.
