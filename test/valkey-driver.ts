@@ -48,26 +48,30 @@ describe(
       }
     }
 
-    // Runs `interfere` once, right after the first read inside the next commit,
-    // so another client can change the data between that read and the write.
+    // Runs `interfere` right after the first read of a commit attempt, so
+    // another client can change the data between that read and the write.
+    // It does so for the first `times` attempts.
     function interfereAfterRead(
       factory: DriverFactory,
       interfere: () => Promise<unknown>,
+      times = 1,
     ): DriverFactory {
       return async (serializer) => {
         const driver = await factory(serializer)
         let armed = false
+        let remaining = times
         return {
           ...driver,
           withTransaction: <T>(callback: () => Promise<T>) =>
             driver.withTransaction(async () => {
-              armed = true
+              armed = remaining > 0
               return await callback()
             }),
           get: async (keyHash, now) => {
             const result = await driver.get(keyHash, now)
             if (armed) {
               armed = false
+              remaining--
               await interfere()
             }
             return result
@@ -351,6 +355,79 @@ describe(
 
         assert.deepStrictEqual(result, { ok: false })
         assert.strictEqual((await db.get(['k'])).value, 'other')
+      } finally {
+        await db.close()
+        await other.close()
+      }
+    })
+
+    await test('a commit retries on fresh data when another client changed a key it read', async () => {
+      const name = namespace()
+      const other = await Valkeyrie.open(
+        valkeyDriver({ client: connect(), namespace: name }),
+      )
+      const db = await Valkeyrie.open(
+        interfereAfterRead(
+          valkeyDriver({ client: connect(), namespace: name }),
+          () => other.set(['n'], new KvU64(10n)),
+        ),
+      )
+      try {
+        assert.ok((await db.atomic().sum(['n'], 1n).commit()).ok)
+        assert.deepStrictEqual((await db.get(['n'])).value, new KvU64(11n))
+      } finally {
+        await db.close()
+        await other.close()
+      }
+    })
+
+    await test('concurrent sums from several clients all land', async () => {
+      const name = namespace()
+      const dbs = await Promise.all(
+        Array.from({ length: 4 }, () =>
+          Valkeyrie.open(valkeyDriver({ client: connect(), namespace: name })),
+        ),
+      )
+      try {
+        const results = await Promise.all(
+          dbs.flatMap((db) =>
+            Array.from({ length: 10 }, () =>
+              db.atomic().sum(['n'], 1n).commit(),
+            ),
+          ),
+        )
+        assert.ok(results.every((result) => result.ok))
+        assert.deepStrictEqual(
+          (await (dbs[0] as Valkeyrie).get(['n'])).value,
+          new KvU64(40n),
+        )
+      } finally {
+        await Promise.all(dbs.map((db) => db.close()))
+      }
+    })
+
+    await test('a commit gives up after repeated conflicts', async () => {
+      const name = namespace()
+      const other = await Valkeyrie.open(
+        valkeyDriver({ client: connect(), namespace: name }),
+      )
+      let interference = 0
+      const db = await Valkeyrie.open(
+        interfereAfterRead(
+          valkeyDriver({ client: connect(), namespace: name }),
+          () => other.set(['n'], new KvU64(BigInt(++interference))),
+          Number.POSITIVE_INFINITY,
+        ),
+      )
+      try {
+        assert.deepStrictEqual(await db.atomic().sum(['n'], 100n).commit(), {
+          ok: false,
+        })
+        assert.ok(interference > 1, 'the commit was retried')
+        assert.deepStrictEqual(
+          (await db.get(['n'])).value,
+          new KvU64(BigInt(interference)),
+        )
       } finally {
         await db.close()
         await other.close()

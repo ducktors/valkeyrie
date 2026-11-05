@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { once } from 'node:events'
+import { setTimeout } from 'node:timers/promises'
 import type { ChainableCommander, Cluster, Redis } from 'ioredis'
 import type { Driver, DriverValue } from './driver.ts'
 import { v8Serializer } from './serializers/v8.ts'
@@ -35,22 +36,34 @@ interface Transaction {
 const VERSIONSTAMP_BYTES = 10
 const HEADER_BYTES = VERSIONSTAMP_BYTES + 8
 
+// How often a commit runs again on fresh data after a watched key changed.
+const COMMIT_ATTEMPTS = 10
+
 function notImplemented(method: string): Error {
   return new Error(`valkeyDriver: ${method} is not implemented yet`)
+}
+
+// Sends a MULTI/EXEC. Returns false when EXEC was aborted because a watched
+// key changed.
+async function tryExec(transaction: ChainableCommander): Promise<boolean> {
+  const results = await transaction.exec()
+  if (results === null) {
+    return false
+  }
+  for (const [error] of results) {
+    if (error) {
+      throw error
+    }
+  }
+  return true
 }
 
 async function exec(
   transaction: ChainableCommander,
   abortedMessage: string,
 ): Promise<void> {
-  const results = await transaction.exec()
-  if (results === null) {
+  if (!(await tryExec(transaction))) {
     throw new Error(`valkeyDriver: ${abortedMessage}`)
-  }
-  for (const [error] of results) {
-    if (error) {
-      throw error
-    }
   }
 }
 
@@ -219,30 +232,50 @@ export function valkeyDriver({
       },
       // Reads inside `callback` WATCH their keys on the commit connection, and
       // writes wait until `callback` resolves, then go out in one MULTI/EXEC.
-      // EXEC fails when a watched key changed, and Valkeyrie then reports the
-      // commit as `{ ok: false }`.
+      // When a watched key changed, EXEC fails and `callback` runs again on
+      // fresh data, so a check that no longer holds returns `{ ok: false }`
+      // and other commits succeed. After COMMIT_ATTEMPTS the driver throws,
+      // and Valkeyrie reports the commit as `{ ok: false }`.
       withTransaction: async <T>(callback: () => Promise<T>): Promise<T> => {
         if (transactions.getStore() !== undefined) {
           return await callback()
         }
-        return await lock(async () => {
+        const attempt = async (): Promise<{
+          committed: boolean
+          result: T
+        }> => {
           const transaction: Transaction = { writes: new Map(), watched: false }
           try {
             const result = await transactions.run(transaction, callback)
-            if (transaction.writes.size > 0) {
-              let commands = (await transactionClient()).multi()
-              for (const [keyHash, entry] of transaction.writes) {
-                commands = write(commands, keyHash, entry)
-              }
-              await exec(commands, 'a key read by the transaction changed')
+            if (transaction.writes.size === 0) {
+              return { committed: true, result }
             }
-            return result
+            let commands = (await transactionClient()).multi()
+            for (const [keyHash, entry] of transaction.writes) {
+              commands = write(commands, keyHash, entry)
+            }
+            return { committed: await tryExec(commands), result }
           } finally {
             if (transaction.watched) {
-              // EXEC has already unwatched on success. An error here must not
-              // turn a committed transaction into a failure.
+              // EXEC has already unwatched. An error here must not turn a
+              // committed transaction into a failure.
               await (await transactionClient()).unwatch().catch(() => {})
             }
+          }
+        }
+        return await lock(async () => {
+          for (let attempts = 1; ; attempts++) {
+            const { committed, result } = await attempt()
+            if (committed) {
+              return result
+            }
+            if (attempts === COMMIT_ATTEMPTS) {
+              throw new Error(
+                `valkeyDriver: keys read by the transaction changed ${COMMIT_ATTEMPTS} times`,
+              )
+            }
+            // Back off 5–20 ms, like the SQLite driver on a busy database.
+            await setTimeout(5 + Math.random() * 15)
           }
         })
       },
