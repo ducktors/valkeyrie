@@ -5,6 +5,7 @@ import { unlink } from 'node:fs/promises'
 import { afterEach, beforeEach, describe, test } from 'node:test'
 import { setTimeout } from 'node:timers/promises'
 import { sqliteDriver } from '../src/sqlite-driver.ts'
+import { sqliteOnly } from './drivers/test-driver.ts'
 
 const hash = (key: string) => createHash('sha256').update(key).digest('hex')
 
@@ -19,7 +20,7 @@ const cleanup = async (path: string) =>
     unlink(`${path}-wal`),
   ])
 
-describe('sqliteDriver', async () => {
+describe('sqliteDriver', sqliteOnly, async () => {
   const TEST_DB_PATH = 'test-db.sqlite'
   let driver: Awaited<ReturnType<typeof sqliteDriver>>
 
