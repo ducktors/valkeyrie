@@ -82,7 +82,12 @@ The tests run on the built-in SQLite driver. To run them on another driver, set 
 VALKEYRIE_TEST_DRIVER=./my-driver.ts pnpm test
 ```
 
-The Valkey driver's own tests (`test/valkey-driver.ts`) run only when `VALKEYRIE_TEST_REDIS_URL` points to a Redis or Valkey server, for example `redis://localhost:6379`.
+The Valkey driver's own tests (`test/valkey-driver.ts`) run only when `VALKEYRIE_TEST_REDIS_URL` points to a Redis or Valkey server. To run them, and the shared suite on the Valkey driver:
+
+```bash
+docker run -d --rm -p 6379:6379 valkey/valkey:8
+VALKEYRIE_TEST_REDIS_URL=redis://localhost:6379 VALKEYRIE_TEST_DRIVER=valkey pnpm test
+```
 
 ### Coding Standards
 
