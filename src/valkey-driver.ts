@@ -24,6 +24,16 @@ export interface ValkeyDriverOptions {
 
 type Client = Redis | Cluster
 
+type WatchEvent = (
+  | DriverValue
+  | { keyHash: string; value: null; versionstamp: null }
+)[]
+
+interface Watcher {
+  keyHashes: string[]
+  controller: ReadableStreamDefaultController<WatchEvent>
+}
+
 // A commit in progress: its pending writes by key hash (the entry to store,
 // or null to delete), and whether it has watched any key.
 interface Transaction {
@@ -39,12 +49,8 @@ const HEADER_BYTES = VERSIONSTAMP_BYTES + 8
 // How often a commit runs again on fresh data after a watched key changed.
 const COMMIT_ATTEMPTS = 10
 
-// The most index members `list` reads at once.
-const LIST_PAGE_SIZE = 1000
-
-function notImplemented(method: string): Error {
-  return new Error(`valkeyDriver: ${method} is not implemented yet`)
-}
+// The most index members `list`, `cleanup` and `clear` handle at once.
+const PAGE_SIZE = 1000
 
 // Sends a MULTI/EXEC. Returns false when EXEC was aborted because a watched
 // key changed.
@@ -194,24 +200,38 @@ export function valkeyDriver({
   const prefix = `{${namespace}}:`
   const entryPrefix = Buffer.from(`${prefix}e:`)
   const indexKey = `${prefix}idx`
+  const expiryKey = `${prefix}exp`
   const sequenceKey = `${prefix}seq`
   // Valkeyrie passes keys as hex; Redis stores the raw bytes.
-  const entryKey = (keyHash: string) =>
-    Buffer.concat([entryPrefix, Buffer.from(keyHash, 'hex')])
+  const entryKeyOf = (member: Buffer) => Buffer.concat([entryPrefix, member])
+  const entryKey = (keyHash: string) => entryKeyOf(Buffer.from(keyHash, 'hex'))
 
-  // Queues the commands that store `entry` under `keyHash`, or delete it.
+  // Queues the commands that store `entry` under `keyHash`, or delete it. An
+  // entry with an expiry time gets the same time as its Redis TTL and as its
+  // score in the expiry index; an entry without one loses both.
   const write = (
     commands: ChainableCommander,
     keyHash: string,
     entry: Buffer | null,
-  ): ChainableCommander =>
-    entry === null
+  ): ChainableCommander => {
+    const member = Buffer.from(keyHash, 'hex')
+    if (entry === null) {
+      return commands
+        .unlink(entryKeyOf(member))
+        .zrem(indexKey, member)
+        .zrem(expiryKey, member)
+    }
+    const expiresAt = Number(entry.readBigUInt64BE(VERSIONSTAMP_BYTES))
+    return expiresAt === 0
       ? commands
-          .unlink(entryKey(keyHash))
-          .zrem(indexKey, Buffer.from(keyHash, 'hex'))
+          .set(entryKeyOf(member), entry)
+          .zadd(indexKey, 0, member)
+          .zrem(expiryKey, member)
       : commands
-          .set(entryKey(keyHash), entry)
-          .zadd(indexKey, 0, Buffer.from(keyHash, 'hex'))
+          .set(entryKeyOf(member), entry, 'PXAT', expiresAt)
+          .zadd(indexKey, 0, member)
+          .zadd(expiryKey, expiresAt, member)
+  }
 
   return async (serializerInit) => {
     const serializer = (serializerInit ?? v8Serializer)()
@@ -221,7 +241,12 @@ export function valkeyDriver({
     // The connection for atomic commits, opened on first use. WATCH applies
     // to a whole connection, so commits must not share the caller's client.
     let transactionConnection: Promise<Client> | undefined
+    // Set by `close`: from then on the driver opens no connection.
+    let closed = false
     const transactionClient = (): Promise<Client> => {
+      if (closed) {
+        return Promise.reject(new Error('valkeyDriver: the driver is closed'))
+      }
       transactionConnection ??= connectDuplicate(client).catch((error) => {
         transactionConnection = undefined
         throw error
@@ -242,6 +267,156 @@ export function valkeyDriver({
         keyHash,
         value: serializer.deserialize(entry.subarray(HEADER_BYTES)),
         versionstamp: entry.toString('hex', 0, VERSIONSTAMP_BYTES),
+      }
+    }
+
+    // Watchers see writes made through this driver instance only.
+    const watchers = new Set<Watcher>()
+    const emit = async (watcher: Watcher) => {
+      try {
+        const now = Date.now()
+        const entries = await client.mgetBuffer(
+          ...watcher.keyHashes.map(entryKey),
+        )
+        const event: WatchEvent = watcher.keyHashes.map((keyHash, index) => {
+          const entry = entries[index]
+          return (
+            (entry ? decode(keyHash, entry, now) : undefined) ?? {
+              keyHash,
+              value: null,
+              versionstamp: null,
+            }
+          )
+        })
+        if (watchers.has(watcher)) {
+          watcher.controller.enqueue(event)
+        }
+      } catch (error) {
+        if (watchers.delete(watcher)) {
+          watcher.controller.error(error)
+        }
+      }
+    }
+    // Sends the current values to the watchers of the changed keys, or to all
+    // watchers when the changed keys are unknown.
+    const notify = async (keyHashes?: Iterable<string>) => {
+      if (watchers.size === 0) {
+        return
+      }
+      const changed = keyHashes === undefined ? undefined : new Set(keyHashes)
+      await Promise.all(
+        [...watchers]
+          .filter(
+            (watcher) =>
+              changed === undefined ||
+              watcher.keyHashes.some((keyHash) => changed.has(keyHash)),
+          )
+          .map(emit),
+      )
+    }
+
+    // Deletes the expired entries listed in the expiry index, one page at a
+    // time. A page's entry keys are WATCHed and the index is read again, so
+    // a key set again in the meantime is left alone. A page whose EXEC fails
+    // is read again, up to COMMIT_ATTEMPTS times: on Redis 6.2, Redis
+    // expiring a watched key also fails EXEC. Returns whether it removed
+    // anything.
+    const removeExpired = async (now: number): Promise<boolean> => {
+      let removed = false
+      let attempts = 0
+      while (!closed) {
+        const candidates = await client.zrangebyscoreBuffer(
+          expiryKey,
+          '-inf',
+          now,
+          'LIMIT',
+          0,
+          PAGE_SIZE,
+        )
+        if (candidates.length === 0) {
+          return removed
+        }
+        const committed = await lock(async () => {
+          if (closed) {
+            return undefined
+          }
+          const connection = await transactionClient()
+          try {
+            await connection.watch(...candidates.map(entryKeyOf))
+            const stillExpired = new Set(
+              (
+                await connection.zrangebyscoreBuffer(
+                  expiryKey,
+                  '-inf',
+                  now,
+                  'LIMIT',
+                  0,
+                  PAGE_SIZE,
+                )
+              ).map((member) => member.toString('hex')),
+            )
+            const members = candidates.filter((member) =>
+              stillExpired.has(member.toString('hex')),
+            )
+            if (members.length === 0) {
+              return false
+            }
+            return await tryExec(
+              connection
+                .multi()
+                .unlink(...members.map(entryKeyOf))
+                .zrem(indexKey, ...members)
+                .zrem(expiryKey, ...members),
+            )
+          } finally {
+            await connection.unwatch().catch(() => {})
+          }
+        })
+        if (committed === undefined) {
+          return removed
+        }
+        if (!committed) {
+          // A page that keeps losing races with writers waits for the next run.
+          if (++attempts === COMMIT_ATTEMPTS) {
+            return removed
+          }
+          await setTimeout(5 + Math.random() * 15)
+          continue
+        }
+        attempts = 0
+        removed = true
+        if (candidates.length < PAGE_SIZE) {
+          return removed
+        }
+      }
+      return removed
+    }
+
+    // Deletes every entry listed in the index, one page at a time. Redis
+    // deletes each index once it is empty.
+    const clear = async () => {
+      while (true) {
+        const members = await client.zrangebylexBuffer(
+          indexKey,
+          '-',
+          '+',
+          'LIMIT',
+          0,
+          PAGE_SIZE,
+        )
+        if (members.length > 0) {
+          await exec(
+            client
+              .multi()
+              .unlink(...members.map(entryKeyOf))
+              .zrem(indexKey, ...members)
+              .zrem(expiryKey, ...members),
+            'transaction was aborted',
+          )
+        }
+        if (members.length < PAGE_SIZE) {
+          return
+        }
       }
     }
 
@@ -269,11 +444,13 @@ export function valkeyDriver({
         return entry === null ? undefined : decode(keyHash, entry, now)
       },
       set: async (keyHash, value, versionstamp, expiresAt) => {
-        if (expiresAt) {
-          throw notImplemented('expiry')
-        }
         const header = Buffer.alloc(HEADER_BYTES)
         header.write(versionstamp, 'hex')
+        // Redis takes whole milliseconds; a fractional time rounds up.
+        header.writeBigUInt64BE(
+          BigInt(Math.ceil(expiresAt || 0)),
+          VERSIONSTAMP_BYTES,
+        )
         const entry = Buffer.concat([header, serializer.serialize(value)])
 
         const transaction = transactions.getStore()
@@ -285,6 +462,7 @@ export function valkeyDriver({
           write(client.multi(), keyHash, entry),
           'transaction was aborted',
         )
+        await notify([keyHash])
       },
       delete: async (keyHash) => {
         const transaction = transactions.getStore()
@@ -296,6 +474,7 @@ export function valkeyDriver({
           write(client.multi(), keyHash, null),
           'transaction was aborted',
         )
+        await notify([keyHash])
       },
       generateVersionstamp: async () => {
         const sequence = await client.incr(sequenceKey)
@@ -319,18 +498,20 @@ export function valkeyDriver({
         const attempt = async (): Promise<{
           committed: boolean
           result: T
+          written: string[]
         }> => {
           const transaction: Transaction = { writes: new Map(), watched: false }
           try {
             const result = await transactions.run(transaction, callback)
-            if (transaction.writes.size === 0) {
-              return { committed: true, result }
+            const written = [...transaction.writes.keys()]
+            if (written.length === 0) {
+              return { committed: true, result, written }
             }
             let commands = (await transactionClient()).multi()
             for (const [keyHash, entry] of transaction.writes) {
               commands = write(commands, keyHash, entry)
             }
-            return { committed: await tryExec(commands), result }
+            return { committed: await tryExec(commands), result, written }
           } finally {
             if (transaction.watched) {
               // EXEC has already unwatched. An error here must not turn a
@@ -339,11 +520,11 @@ export function valkeyDriver({
             }
           }
         }
-        return await lock(async () => {
+        const { result, written } = await lock(async () => {
           for (let attempts = 1; ; attempts++) {
-            const { committed, result } = await attempt()
-            if (committed) {
-              return result
+            const outcome = await attempt()
+            if (outcome.committed) {
+              return outcome
             }
             if (attempts === COMMIT_ATTEMPTS) {
               throw new Error(
@@ -354,6 +535,8 @@ export function valkeyDriver({
             await setTimeout(5 + Math.random() * 15)
           }
         })
+        await notify(written)
+        return result
       },
       // Reads the index in key order and fetches the entries with MGET. It
       // skips the prefix key itself and members whose entry has expired or is
@@ -376,7 +559,7 @@ export function valkeyDriver({
         let from = reverse ? max : min
         const to = reverse ? min : max
         while (results.length < limit) {
-          const count = Math.min(limit - results.length, LIST_PAGE_SIZE)
+          const count = Math.min(limit - results.length, PAGE_SIZE)
           const members = reverse
             ? await client.zrevrangebylexBuffer(
                 indexKey,
@@ -416,24 +599,58 @@ export function valkeyDriver({
         }
         return results
       },
-      // Nothing can expire until expiry is implemented.
-      cleanup: async () => {},
-      watch: () => {
-        throw notImplemented('watch')
+      // Redis drops expired entries by itself; this also removes them from
+      // both indexes. Several processes can run it at once.
+      cleanup: async (now) => {
+        if (await removeExpired(now)) {
+          await notify()
+        }
       },
+      // Emits the current values, then the new values each time a write
+      // through this driver instance changes a watched key.
+      watch: (keyHashes) => {
+        let watcher: Watcher | undefined
+        return new ReadableStream<WatchEvent>({
+          start: (controller) => {
+            watcher = { keyHashes, controller }
+            watchers.add(watcher)
+            void emit(watcher)
+          },
+          cancel: () => {
+            if (watcher) {
+              watchers.delete(watcher)
+            }
+          },
+        })
+      },
+      // Keeps the versionstamp sequence, like the SQLite driver.
       clear: async () => {
-        throw notImplemented('clear')
+        await clear()
+        await notify()
       },
       destroy: async () => {
-        throw notImplemented('destroy')
+        await clear()
+        await client.unlink(sequenceKey)
+        await notify()
       },
-      // Waits for a running commit, then closes the commit connection.
-      close: () =>
-        lock(async () => {
+      // Ends the watches, waits for a running commit, then closes the commit
+      // connection. The caller's client stays open.
+      close: async () => {
+        closed = true
+        for (const watcher of watchers) {
+          try {
+            watcher.controller.close()
+          } catch {
+            // Already closed or cancelled.
+          }
+        }
+        watchers.clear()
+        await lock(async () => {
           const connection = await transactionConnection?.catch(() => undefined)
           transactionConnection = undefined
-          await connection?.quit()
-        }),
+          connection?.disconnect()
+        })
+      },
     }
     return driver
   }

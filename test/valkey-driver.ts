@@ -2,6 +2,7 @@ import assert from 'node:assert'
 import { after, describe, test } from 'node:test'
 import { setTimeout } from 'node:timers/promises'
 import { Redis } from 'ioredis'
+import type { Driver } from '../src/driver.ts'
 import { KvU64 } from '../src/kv-u64.ts'
 import { jsonSerializer } from '../src/serializers/json.ts'
 import type { Serializer } from '../src/serializers/serializer.ts'
@@ -711,23 +712,356 @@ describe(
       }
     })
 
-    await test('methods of later tickets throw a clear error', async () => {
-      const driver = await valkeyDriver({
-        client: connect(),
-        namespace: namespace(),
-      })(v8Serializer)
-      const notImplemented = /not implemented yet/
-      const keyHash = Buffer.from([0x02, 0x6b, 0x00]).toString('hex')
-      try {
-        await assert.rejects(
-          driver.set(keyHash, 'v', '0'.repeat(20), Date.now() + 1000),
-          notImplemented,
+    // A driver and the Redis keys of its namespace.
+    async function openDriver(client = connect()) {
+      const name = namespace()
+      const driver = await valkeyDriver({ client, namespace: name })(
+        v8Serializer,
+      )
+      const keys = {
+        entry: (keyHash: string) =>
+          Buffer.concat([
+            Buffer.from(`{${name}}:e:`),
+            Buffer.from(keyHash, 'hex'),
+          ]),
+        index: `{${name}}:idx`,
+        expiry: `{${name}}:exp`,
+        sequence: `{${name}}:seq`,
+      }
+      const members = async (key: string) =>
+        (await admin.zrangeBuffer(key, 0, -1)).map((member) =>
+          member.toString('hex'),
         )
-        assert.throws(() => driver.watch([keyHash]), notImplemented)
-        await assert.rejects(driver.clear(), notImplemented)
-        await assert.rejects(driver.destroy(), notImplemented)
+      return { driver, name, keys, members }
+    }
+    const VERSIONSTAMP = '0'.repeat(20)
+
+    await test('a set with an expiry gets a TTL, and a plain set clears it', async () => {
+      const { driver, keys, members } = await openDriver()
+      const keyHash = hex(0x02, 0x6b, 0x00)
+      try {
+        const expiresAt = Date.now() + 60_000
+        await driver.set(keyHash, 1, VERSIONSTAMP, expiresAt)
+        const ttl = await admin.pttl(keys.entry(keyHash))
+        assert.ok(ttl > 0 && ttl <= 60_000, `TTL ${ttl}`)
+        assert.strictEqual(
+          await admin.zscore(keys.expiry, Buffer.from(keyHash, 'hex')),
+          String(expiresAt),
+        )
+        assert.strictEqual((await driver.get(keyHash, Date.now()))?.value, 1)
+        assert.strictEqual(await driver.get(keyHash, expiresAt), undefined)
+
+        await driver.set(keyHash, 2, VERSIONSTAMP)
+        assert.strictEqual(await admin.pttl(keys.entry(keyHash)), -1)
+        assert.deepStrictEqual(await members(keys.expiry), [])
+        assert.strictEqual((await driver.get(keyHash, expiresAt))?.value, 2)
+
+        // A fractional expiry time, from a fractional `expireIn`, rounds up.
+        await driver.set(keyHash, 3, VERSIONSTAMP, expiresAt + 0.5)
+        assert.strictEqual(
+          await admin.zscore(keys.expiry, Buffer.from(keyHash, 'hex')),
+          String(expiresAt + 1),
+        )
+        await driver.delete(keyHash)
+        assert.deepStrictEqual(await members(keys.index), [])
+        assert.deepStrictEqual(await members(keys.expiry), [])
       } finally {
         await driver.close()
+      }
+    })
+
+    await test('cleanup removes expired entries and their index members', async () => {
+      const { driver, keys, members } = await openDriver()
+      const [expired1, expired2, evicted, live, later] = [1, 2, 3, 4, 5].map(
+        (i) => hex(0x04, i, 0x00),
+      )
+      try {
+        const soon = Date.now() + 50
+        await driver.set(expired1 as string, 'x', VERSIONSTAMP, soon)
+        await driver.set(expired2 as string, 'x', VERSIONSTAMP, soon)
+        await driver.set(evicted as string, 'x', VERSIONSTAMP, soon)
+        await driver.set(live as string, 'x', VERSIONSTAMP)
+        await driver.set(later as string, 'x', VERSIONSTAMP, soon + 3_600_000)
+        // Redis evicts an entry before it expires.
+        await admin.unlink(keys.entry(evicted as string))
+        await setTimeout(100)
+
+        await driver.cleanup(Date.now())
+        assert.deepStrictEqual(await members(keys.index), [live, later])
+        assert.deepStrictEqual(await members(keys.expiry), [later])
+        assert.strictEqual(
+          await admin.exists(keys.entry(expired1 as string)),
+          0,
+        )
+      } finally {
+        await driver.close()
+      }
+    })
+
+    await test('cleanup keeps a key that another client sets again meanwhile', async () => {
+      const client = connect()
+      const { driver, name, keys, members } = await openDriver(client)
+      const other = await valkeyDriver({ client: connect(), namespace: name })(
+        v8Serializer,
+      )
+      const keyHash = hex(0x02, 0x6b, 0x00)
+      // Right after cleanup reads the expiry index, the other client sets
+      // the key again, without an expiry.
+      const read = client.zrangebyscoreBuffer.bind(client)
+      let interfered = false
+      client.zrangebyscoreBuffer = (async (
+        ...args: Parameters<typeof read>
+      ) => {
+        const result = await read(...args)
+        if (!interfered) {
+          interfered = true
+          await other.set(keyHash, 'again', VERSIONSTAMP)
+        }
+        return result
+      }) as typeof read
+      try {
+        await driver.set(keyHash, 'expiring', VERSIONSTAMP, Date.now() + 50)
+        await setTimeout(100)
+
+        await driver.cleanup(Date.now())
+        assert.ok(interfered)
+        assert.strictEqual(
+          (await driver.get(keyHash, Date.now()))?.value,
+          'again',
+        )
+        assert.deepStrictEqual(await members(keys.index), [keyHash])
+        assert.deepStrictEqual(await members(keys.expiry), [])
+      } finally {
+        await driver.close()
+        await other.close()
+      }
+    })
+
+    await test('a cleanup running when the driver closes opens no connection', async () => {
+      const client = connect()
+      const duplicates: Redis[] = []
+      const duplicate = client.duplicate.bind(client)
+      client.duplicate = (...args: Parameters<Redis['duplicate']>) => {
+        const connection = duplicate(...args)
+        duplicates.push(connection)
+        return connection
+      }
+      const { driver } = await openDriver(client)
+      try {
+        await driver.set(
+          hex(0x02, 0x6b, 0x00),
+          'x',
+          VERSIONSTAMP,
+          Date.now() + 10,
+        )
+        await setTimeout(50)
+        // The driver closes right after cleanup reads the expiry index.
+        const read = client.zrangebyscoreBuffer.bind(client)
+        client.zrangebyscoreBuffer = (async (
+          ...args: Parameters<typeof read>
+        ) => {
+          const result = await read(...args)
+          await driver.close()
+          return result
+        }) as typeof read
+
+        await driver.cleanup(Date.now())
+        for (const connection of duplicates) {
+          await assert.rejects(connection.ping())
+        }
+      } finally {
+        for (const connection of duplicates) {
+          connection.disconnect()
+        }
+      }
+    })
+
+    await test('two processes can run cleanup together', async () => {
+      const { driver: one, name, keys, members } = await openDriver()
+      const two = await valkeyDriver({ client: connect(), namespace: name })(
+        v8Serializer,
+      )
+      try {
+        const expired = Array.from({ length: 1500 }, (_, i) =>
+          hex(0x04, i >> 8, i & 0xff, 0x00),
+        )
+        const soon = Date.now() + 50
+        for (const keyHash of expired) {
+          await one.set(keyHash, 'x', VERSIONSTAMP, soon)
+        }
+        const live = hex(0x02, 0x6c, 0x00)
+        await one.set(live, 'x', VERSIONSTAMP)
+        await setTimeout(100)
+
+        const now = Date.now()
+        await Promise.all([one.cleanup(now), two.cleanup(now)])
+        // A run that lost a race to the other leaves the rest to the next run.
+        await one.cleanup(now)
+        assert.deepStrictEqual(await members(keys.index), [live])
+        assert.deepStrictEqual(await members(keys.expiry), [])
+      } finally {
+        await one.close()
+        await two.close()
+      }
+    })
+
+    await test('watch emits current values, then after each change through the same instance', async () => {
+      const db = await Valkeyrie.open(
+        valkeyDriver({ client: connect(), namespace: namespace() }),
+      )
+      const reader = db.watch([['a'], ['b']]).getReader()
+      const next = async () => {
+        const { value } = await reader.read()
+        return value?.map((entry) => entry.value)
+      }
+      try {
+        assert.deepStrictEqual(await next(), [null, null])
+        await db.set(['a'], 1)
+        assert.deepStrictEqual(await next(), [1, null])
+        await db.set(['unwatched'], 'no event')
+        await db.atomic().set(['b'], 2).commit()
+        assert.deepStrictEqual(await next(), [1, 2])
+        await db.delete(['a'])
+        assert.deepStrictEqual(await next(), [null, 2])
+        await db.clear()
+        assert.deepStrictEqual(await next(), [null, null])
+      } finally {
+        await reader.cancel()
+        await db.close()
+      }
+    })
+
+    await test('clear deletes entries and indexes but keeps the sequence', async () => {
+      const { driver, name, keys } = await openDriver()
+      try {
+        await driver.set(
+          hex(0x02, 0x61, 0x00),
+          1,
+          await driver.generateVersionstamp(),
+        )
+        const before = await driver.generateVersionstamp()
+        await driver.set(hex(0x02, 0x62, 0x00), 2, before, Date.now() + 60_000)
+
+        await driver.clear()
+        assert.deepStrictEqual(
+          await driver.list('', '￿', '', Date.now(), 10),
+          [],
+        )
+        const left = await admin.keys(`{${name}}:*`)
+        assert.deepStrictEqual(left, [keys.sequence])
+        const after = await driver.generateVersionstamp()
+        assert.ok(
+          (BigInt(`0x${after}`) & 0xfffffn) >
+            (BigInt(`0x${before}`) & 0xfffffn),
+        )
+      } finally {
+        await driver.close()
+      }
+    })
+
+    await test('destroy deletes every key of the namespace', async () => {
+      const { driver, name } = await openDriver()
+      try {
+        await driver.set(
+          hex(0x02, 0x61, 0x00),
+          1,
+          await driver.generateVersionstamp(),
+        )
+        await driver.set(
+          hex(0x02, 0x62, 0x00),
+          2,
+          VERSIONSTAMP,
+          Date.now() + 60_000,
+        )
+        await driver.destroy()
+        assert.deepStrictEqual(await admin.keys(`{${name}}:*`), [])
+      } finally {
+        await driver.close()
+      }
+    })
+
+    await test('uses only the commands listed in the design', async () => {
+      const allowed = new Set([
+        'get',
+        'mget',
+        'set',
+        'unlink',
+        'incr',
+        'zadd',
+        'zrem',
+        'zrangebylex',
+        'zrevrangebylex',
+        'zrangebyscore',
+        'watch',
+        'multi',
+        'exec',
+        'unwatch',
+      ])
+      // Sent by ioredis itself while it connects.
+      const connectionSetup = new Set([
+        'info',
+        'client',
+        'select',
+        'auth',
+        'hello',
+      ])
+      const used = new Set<string>()
+      const record = (redis: Redis): Redis => {
+        const send = redis.sendCommand.bind(redis)
+        redis.sendCommand = (...args: Parameters<Redis['sendCommand']>) => {
+          used.add(args[0].name.toLowerCase())
+          return send(...args)
+        }
+        const duplicate = redis.duplicate.bind(redis)
+        redis.duplicate = (...args: Parameters<Redis['duplicate']>) =>
+          record(duplicate(...args))
+        return redis
+      }
+
+      let driver: Driver | undefined
+      const factory = valkeyDriver({
+        client: record(connect()),
+        namespace: namespace(),
+      })
+      const db = await Valkeyrie.open(async (serializer) => {
+        driver = await factory(serializer)
+        return driver
+      })
+      try {
+        const reader = db.watch([['a']]).getReader()
+        await reader.read()
+        await db.set(['a'], 1)
+        await reader.read()
+        await reader.cancel()
+        await db.set(['b'], 2, { expireIn: 50 })
+        await db.getMany([['a'], ['b']])
+        await Array.fromAsync(db.list({ prefix: [] }))
+        await Array.fromAsync(db.list({ prefix: [] }, { reverse: true }))
+        await db
+          .atomic()
+          .check({
+            key: ['a'],
+            versionstamp: (await db.get(['a'])).versionstamp,
+          })
+          .set(['a'], 3)
+          .sum(['n'], 1n)
+          .commit()
+        await db.delete(['a'])
+        await setTimeout(100)
+        await (driver as Driver).cleanup(Date.now())
+        await db.clear()
+        await db.destroy()
+      } finally {
+        await db.close()
+      }
+
+      const sent = [...used].filter((name) => !connectionSetup.has(name))
+      assert.deepStrictEqual(
+        sent.filter((name) => !allowed.has(name)),
+        [],
+      )
+      for (const name of ['watch', 'exec', 'zrangebylex', 'zrangebyscore']) {
+        assert.ok(used.has(name), `${name} was not recorded`)
       }
     })
 

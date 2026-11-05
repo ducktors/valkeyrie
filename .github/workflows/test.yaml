@@ -59,15 +59,22 @@ jobs:
     runs-on: ubuntu-latest
     name: Valkey driver (${{ matrix.image }})
     strategy:
+      fail-fast: false
       matrix:
-        image: ['redis:7.2']
+        include:
+          - image: redis:6.2
+            cli: redis-cli
+          - image: redis:7.2
+            cli: redis-cli
+          - image: valkey/valkey:8
+            cli: valkey-cli
     services:
       redis:
         image: ${{ matrix.image }}
         ports:
           - 6379:6379
         options: >-
-          --health-cmd "redis-cli ping"
+          --health-cmd "${{ matrix.cli }} ping"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
@@ -92,9 +99,5 @@ jobs:
           version: ${{ env.PNPM_VERSION }}
       - name: Install with pnpm
         run: pnpm install
-      # The driver has no expiry, watch or clear yet: skip the tests that need them.
       - name: Run the shared suite and the driver tests
-        run: >-
-          node --test
-          --test-skip-pattern="/expiration|watch|clear removes all data/"
-          ./test/valkeyrie.ts ./test/valkey-driver.ts
+        run: node --test ./test/valkeyrie.ts ./test/valkey-driver.ts
