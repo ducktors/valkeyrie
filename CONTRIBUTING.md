@@ -82,6 +82,8 @@ The tests run on the built-in SQLite driver. To run them on another driver, set 
 VALKEYRIE_TEST_DRIVER=./my-driver.ts pnpm test
 ```
 
+The Valkey driver's own tests (`test/valkey-driver.ts`) run only when `VALKEYRIE_TEST_REDIS_URL` points to a Redis or Valkey server, for example `redis://localhost:6379`.
+
 ### Coding Standards
 
 - Follow the existing code style
