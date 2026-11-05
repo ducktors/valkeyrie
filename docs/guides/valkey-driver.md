@@ -97,6 +97,6 @@ One driver instance runs one commit at a time. Open one database per process and
 
 ## Compatibility
 
-- Redis 6.2 or later, and Valkey 7.2 or later. The test suite runs on standalone Redis 6.2, Redis 7.2 and Valkey 8 servers.
+- Redis 6.2 or later, and Valkey 7.2 or later. The test suite runs on standalone Redis 6.2, Redis 7.2, Valkey 8 and Valkey 9 servers.
 - Sentinel works through an ioredis `Redis` client, and cluster mode through an ioredis `Cluster` client, since a namespace stays on one shard. The test suite does not cover them yet.
 - The driver uses only core commands, which Redis and Valkey share, and no modules: `GET`, `MGET`, `SET` (with `PX`), `UNLINK`, `INCR`, `ZADD`, `ZREM`, `ZRANGEBYLEX`, `ZREVRANGEBYLEX`, `ZRANGEBYSCORE`, `WATCH`, `MULTI`, `EXEC` and `UNWATCH`.

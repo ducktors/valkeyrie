@@ -68,6 +68,8 @@ jobs:
             cli: redis-cli
           - image: valkey/valkey:8
             cli: valkey-cli
+          - image: valkey/valkey:9
+            cli: valkey-cli
     services:
       redis:
         image: ${{ matrix.image }}
