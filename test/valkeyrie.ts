@@ -54,6 +54,54 @@ function createSpyDriverFn(
   }
 }
 
+/**
+ * Wraps the built-in in-memory SQLite driver so tests can observe its lifecycle.
+ * `cleanup` settles only after a delay, like a network-backed driver would; when
+ * `failOnCall` is set, that (1-based) cleanup call rejects instead. `close` and
+ * `destroy` calls are counted; with `failClose`, `close` still releases the
+ * inner driver but then rejects.
+ */
+type DriverProbe = {
+  calls: number
+  settled: number
+  closed: number
+  destroyed: number
+  failClose?: boolean
+}
+
+function createProbeDriverFn(
+  probe: DriverProbe,
+  failOnCall?: number,
+): (serializer?: () => Serializer) => Promise<Driver> {
+  return async (serializer?: () => Serializer): Promise<Driver> => {
+    const inner = await sqliteDriver(':memory:', serializer)
+    return {
+      ...inner,
+      close: async () => {
+        probe.closed += 1
+        await inner.close()
+        if (probe.failClose) {
+          throw new Error('driver close failed')
+        }
+      },
+      destroy: async () => {
+        probe.destroyed += 1
+        await inner.destroy()
+      },
+      cleanup: async (now: number) => {
+        probe.calls += 1
+        const call = probe.calls
+        await setTimeout(20)
+        if (call === failOnCall) {
+          throw new Error('driver cleanup failed')
+        }
+        await inner.cleanup(now)
+        probe.settled += 1
+      },
+    }
+  }
+}
+
 describe('test valkeyrie', async () => {
   async function dbTest(
     name: string,
@@ -3141,6 +3189,186 @@ describe('test valkeyrie', async () => {
     } finally {
       await db.close()
     }
+  })
+
+  await test('open() waits for the driver cleanup to settle', async () => {
+    const probe: DriverProbe = {
+      calls: 0,
+      settled: 0,
+      closed: 0,
+      destroyed: 0,
+    }
+
+    const db = await Valkeyrie.open(createProbeDriverFn(probe))
+
+    try {
+      assert.strictEqual(probe.calls, 1)
+      assert.strictEqual(probe.settled, 1)
+    } finally {
+      await db.close()
+    }
+  })
+
+  await test('cleanup() waits for the driver cleanup to settle', async () => {
+    const probe: DriverProbe = {
+      calls: 0,
+      settled: 0,
+      closed: 0,
+      destroyed: 0,
+    }
+
+    const db = await Valkeyrie.open(createProbeDriverFn(probe))
+
+    try {
+      await db.cleanup()
+      assert.strictEqual(probe.calls, 2)
+      assert.strictEqual(probe.settled, 2)
+    } finally {
+      await db.close()
+    }
+  })
+
+  await test('open() closes but does not destroy the driver when cleanup rejects', async () => {
+    const probe: DriverProbe = {
+      calls: 0,
+      settled: 0,
+      closed: 0,
+      destroyed: 0,
+    }
+
+    await assert.rejects(
+      Valkeyrie.open(createProbeDriverFn(probe, 1), { destroyOnClose: true }),
+      /driver cleanup failed/,
+    )
+    // open() never hands back a db, so it must close the driver itself,
+    // without destroying data the store may already hold
+    assert.strictEqual(probe.closed, 1)
+    assert.strictEqual(probe.destroyed, 0)
+  })
+
+  await test('cleanup() rejects when the driver cleanup rejects', async () => {
+    const probe: DriverProbe = {
+      calls: 0,
+      settled: 0,
+      closed: 0,
+      destroyed: 0,
+    }
+
+    const db = await Valkeyrie.open(createProbeDriverFn(probe, 2))
+
+    try {
+      await assert.rejects(db.cleanup(), /driver cleanup failed/)
+    } finally {
+      await db.close()
+    }
+  })
+
+  await test('from() closes but does not destroy the driver when population fails', async () => {
+    const probe: DriverProbe = {
+      calls: 0,
+      settled: 0,
+      closed: 0,
+      destroyed: 0,
+    }
+    const items = [{ id: 1, value: 'valid' }, { value: 'missing id' }]
+
+    await assert.rejects(
+      Valkeyrie.from(items as { id: number; value: string }[], {
+        prefix: ['items'],
+        keyProperty: 'id',
+        onError: 'stop',
+        destroyOnClose: true,
+        driverFn: createProbeDriverFn(probe),
+      }),
+      TypeError,
+    )
+    assert.strictEqual(probe.closed, 1)
+    assert.strictEqual(probe.destroyed, 0)
+  })
+
+  await test('fromAsync() closes but does not destroy the driver when population fails', async () => {
+    const probe: DriverProbe = {
+      calls: 0,
+      settled: 0,
+      closed: 0,
+      destroyed: 0,
+    }
+    async function* generate() {
+      yield { id: 1, value: 'valid' }
+      yield { value: 'missing id' } as { id: number; value: string }
+    }
+
+    await assert.rejects(
+      Valkeyrie.fromAsync(generate(), {
+        prefix: ['items'],
+        keyProperty: 'id',
+        onError: 'stop',
+        destroyOnClose: true,
+        driverFn: createProbeDriverFn(probe),
+      }),
+      TypeError,
+    )
+    assert.strictEqual(probe.closed, 1)
+    assert.strictEqual(probe.destroyed, 0)
+  })
+
+  await test('open() surfaces the cleanup error when closing the driver also fails', async () => {
+    const probe: DriverProbe = {
+      calls: 0,
+      settled: 0,
+      closed: 0,
+      destroyed: 0,
+      failClose: true,
+    }
+
+    await assert.rejects(
+      Valkeyrie.open(createProbeDriverFn(probe, 1)),
+      /driver cleanup failed/,
+    )
+    assert.strictEqual(probe.closed, 1)
+  })
+
+  await test('from() surfaces the population error when closing the driver also fails', async () => {
+    const probe: DriverProbe = {
+      calls: 0,
+      settled: 0,
+      closed: 0,
+      destroyed: 0,
+      failClose: true,
+    }
+    const items = [{ id: 1, value: 'valid' }, { value: 'missing id' }]
+
+    await assert.rejects(
+      Valkeyrie.from(items as { id: number; value: string }[], {
+        prefix: ['items'],
+        keyProperty: 'id',
+        onError: 'stop',
+        driverFn: createProbeDriverFn(probe),
+      }),
+      TypeError,
+    )
+    assert.strictEqual(probe.closed, 1)
+  })
+
+  await test('from() closes the driver when the prefix is invalid', async () => {
+    const probe: DriverProbe = {
+      calls: 0,
+      settled: 0,
+      closed: 0,
+      destroyed: 0,
+    }
+
+    await assert.rejects(
+      Valkeyrie.from([{ id: 1 }], {
+        prefix: 'items' as unknown as Key,
+        keyProperty: 'id',
+        destroyOnClose: true,
+        driverFn: createProbeDriverFn(probe),
+      }),
+      { name: 'TypeError', message: 'Key must be an array' },
+    )
+    assert.strictEqual(probe.closed, 1)
+    assert.strictEqual(probe.destroyed, 0)
   })
 
   await test('from() uses driverFn when provided', async () => {
