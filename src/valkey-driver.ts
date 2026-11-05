@@ -1,5 +1,7 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { once } from 'node:events'
 import type { ChainableCommander, Cluster, Redis } from 'ioredis'
-import type { Driver } from './driver.ts'
+import type { Driver, DriverValue } from './driver.ts'
 import { v8Serializer } from './serializers/v8.ts'
 import type { DriverFactory } from './valkeyrie.ts'
 
@@ -7,7 +9,8 @@ import type { DriverFactory } from './valkeyrie.ts'
 export interface ValkeyDriverOptions {
   /**
    * An ioredis-compatible client connected to Redis or Valkey. The caller
-   * owns it: the driver never closes it.
+   * owns it: the driver never closes it. The driver opens one more
+   * connection, a duplicate of this client, for atomic commits.
    */
   client: Redis | Cluster
   /**
@@ -16,6 +19,15 @@ export interface ValkeyDriverOptions {
    * empty and must not contain `{` or `}`.
    */
   namespace: string
+}
+
+type Client = Redis | Cluster
+
+// A commit in progress: its pending writes by key hash (the entry to store,
+// or null to delete), and whether it has watched any key.
+interface Transaction {
+  writes: Map<string, Buffer | null>
+  watched: boolean
 }
 
 // An entry is one string: the versionstamp, the expiry time in milliseconds
@@ -27,15 +39,43 @@ function notImplemented(method: string): Error {
   return new Error(`valkeyDriver: ${method} is not implemented yet`)
 }
 
-async function exec(transaction: ChainableCommander): Promise<void> {
+async function exec(
+  transaction: ChainableCommander,
+  abortedMessage: string,
+): Promise<void> {
   const results = await transaction.exec()
   if (results === null) {
-    throw new Error('valkeyDriver: transaction was aborted')
+    throw new Error(`valkeyDriver: ${abortedMessage}`)
   }
   for (const [error] of results) {
     if (error) {
       throw error
     }
+  }
+}
+
+// Runs tasks one at a time, in call order.
+function createLock(): <T>(task: () => Promise<T>) => Promise<T> {
+  let tail: Promise<unknown> = Promise.resolve()
+  return (task) => {
+    const result = tail.then(task)
+    tail = result.catch(() => {})
+    return result
+  }
+}
+
+async function connectDuplicate(client: Client): Promise<Client> {
+  const connection = client.duplicate()
+  try {
+    if (connection.status === 'wait') {
+      await connection.connect()
+    } else if (connection.status !== 'ready') {
+      await once(connection, 'ready')
+    }
+    return connection
+  } catch (error) {
+    connection.disconnect()
+    throw error
   }
 }
 
@@ -70,24 +110,74 @@ export function valkeyDriver({
   const entryKey = (keyHash: string) =>
     Buffer.concat([entryPrefix, Buffer.from(keyHash, 'hex')])
 
+  // Queues the commands that store `entry` under `keyHash`, or delete it.
+  const write = (
+    commands: ChainableCommander,
+    keyHash: string,
+    entry: Buffer | null,
+  ): ChainableCommander =>
+    entry === null
+      ? commands
+          .unlink(entryKey(keyHash))
+          .zrem(indexKey, Buffer.from(keyHash, 'hex'))
+      : commands
+          .set(entryKey(keyHash), entry)
+          .zadd(indexKey, 0, Buffer.from(keyHash, 'hex'))
+
   return async (serializerInit) => {
     const serializer = (serializerInit ?? v8Serializer)()
+    const transactions = new AsyncLocalStorage<Transaction>()
+    const lock = createLock()
+
+    // The connection for atomic commits, opened on first use. WATCH applies
+    // to a whole connection, so commits must not share the caller's client.
+    let transactionConnection: Promise<Client> | undefined
+    const transactionClient = (): Promise<Client> => {
+      transactionConnection ??= connectDuplicate(client).catch((error) => {
+        transactionConnection = undefined
+        throw error
+      })
+      return transactionConnection
+    }
+
+    const decode = (
+      keyHash: string,
+      entry: Buffer,
+      now: number,
+    ): DriverValue | undefined => {
+      const expiresAt = entry.readBigUInt64BE(VERSIONSTAMP_BYTES)
+      if (expiresAt !== 0n && expiresAt <= BigInt(now)) {
+        return undefined
+      }
+      return {
+        keyHash,
+        value: serializer.deserialize(entry.subarray(HEADER_BYTES)),
+        versionstamp: entry.toString('hex', 0, VERSIONSTAMP_BYTES),
+      }
+    }
 
     const driver: Driver = {
       get: async (keyHash, now) => {
-        const entry = await client.getBuffer(entryKey(keyHash))
-        if (entry === null) {
-          return undefined
+        const transaction = transactions.getStore()
+        if (transaction === undefined) {
+          const entry = await client.getBuffer(entryKey(keyHash))
+          return entry === null ? undefined : decode(keyHash, entry, now)
         }
-        const expiresAt = entry.readBigUInt64BE(VERSIONSTAMP_BYTES)
-        if (expiresAt !== 0n && expiresAt <= BigInt(now)) {
-          return undefined
+
+        // Inside a commit, a key it already wrote reads as that write.
+        const pending = transaction.writes.get(keyHash)
+        if (pending !== undefined) {
+          return pending === null ? undefined : decode(keyHash, pending, now)
         }
-        return {
-          keyHash,
-          value: serializer.deserialize(entry.subarray(HEADER_BYTES)),
-          versionstamp: entry.toString('hex', 0, VERSIONSTAMP_BYTES),
-        }
+        // Otherwise WATCH the key, so EXEC fails if anyone changes it.
+        const connection = await transactionClient()
+        const key = entryKey(keyHash)
+        transaction.watched = true
+        const [, entry] = await Promise.all([
+          connection.watch(key),
+          connection.getBuffer(key),
+        ])
+        return entry === null ? undefined : decode(keyHash, entry, now)
       },
       set: async (keyHash, value, versionstamp, expiresAt) => {
         if (expiresAt) {
@@ -96,19 +186,26 @@ export function valkeyDriver({
         const header = Buffer.alloc(HEADER_BYTES)
         header.write(versionstamp, 'hex')
         const entry = Buffer.concat([header, serializer.serialize(value)])
+
+        const transaction = transactions.getStore()
+        if (transaction !== undefined) {
+          transaction.writes.set(keyHash, entry)
+          return
+        }
         await exec(
-          client
-            .multi()
-            .set(entryKey(keyHash), entry)
-            .zadd(indexKey, 0, Buffer.from(keyHash, 'hex')),
+          write(client.multi(), keyHash, entry),
+          'transaction was aborted',
         )
       },
       delete: async (keyHash) => {
+        const transaction = transactions.getStore()
+        if (transaction !== undefined) {
+          transaction.writes.set(keyHash, null)
+          return
+        }
         await exec(
-          client
-            .multi()
-            .unlink(entryKey(keyHash))
-            .zrem(indexKey, Buffer.from(keyHash, 'hex')),
+          write(client.multi(), keyHash, null),
+          'transaction was aborted',
         )
       },
       generateVersionstamp: async () => {
@@ -120,11 +217,37 @@ export function valkeyDriver({
           .toString(16)
           .padStart(20, '0')
       },
+      // Reads inside `callback` WATCH their keys on the commit connection, and
+      // writes wait until `callback` resolves, then go out in one MULTI/EXEC.
+      // EXEC fails when a watched key changed, and Valkeyrie then reports the
+      // commit as `{ ok: false }`.
+      withTransaction: async <T>(callback: () => Promise<T>): Promise<T> => {
+        if (transactions.getStore() !== undefined) {
+          return await callback()
+        }
+        return await lock(async () => {
+          const transaction: Transaction = { writes: new Map(), watched: false }
+          try {
+            const result = await transactions.run(transaction, callback)
+            if (transaction.writes.size > 0) {
+              let commands = (await transactionClient()).multi()
+              for (const [keyHash, entry] of transaction.writes) {
+                commands = write(commands, keyHash, entry)
+              }
+              await exec(commands, 'a key read by the transaction changed')
+            }
+            return result
+          } finally {
+            if (transaction.watched) {
+              // EXEC has already unwatched on success. An error here must not
+              // turn a committed transaction into a failure.
+              await (await transactionClient()).unwatch().catch(() => {})
+            }
+          }
+        })
+      },
       list: async () => {
         throw notImplemented('list')
-      },
-      withTransaction: async () => {
-        throw notImplemented('withTransaction')
       },
       // Nothing can expire until expiry is implemented.
       cleanup: async () => {},
@@ -137,8 +260,13 @@ export function valkeyDriver({
       destroy: async () => {
         throw notImplemented('destroy')
       },
-      // The driver owns no connection yet.
-      close: async () => {},
+      // Waits for a running commit, then closes the commit connection.
+      close: () =>
+        lock(async () => {
+          const connection = await transactionConnection?.catch(() => undefined)
+          transactionConnection = undefined
+          await connection?.quit()
+        }),
     }
     return driver
   }

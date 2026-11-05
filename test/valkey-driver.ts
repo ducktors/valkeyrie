@@ -1,6 +1,8 @@
 import assert from 'node:assert'
 import { after, describe, test } from 'node:test'
+import { setTimeout } from 'node:timers/promises'
 import { Redis } from 'ioredis'
+import { KvU64 } from '../src/kv-u64.ts'
 import { jsonSerializer } from '../src/serializers/json.ts'
 import type { Serializer } from '../src/serializers/serializer.ts'
 import { v8Serializer } from '../src/serializers/v8.ts'
@@ -41,6 +43,34 @@ describe(
           set: (keyHash, ...rest) => {
             keyHashes.push(keyHash)
             return driver.set(keyHash, ...rest)
+          },
+        }
+      }
+    }
+
+    // Runs `interfere` once, right after the first read inside the next commit,
+    // so another client can change the data between that read and the write.
+    function interfereAfterRead(
+      factory: DriverFactory,
+      interfere: () => Promise<unknown>,
+    ): DriverFactory {
+      return async (serializer) => {
+        const driver = await factory(serializer)
+        let armed = false
+        return {
+          ...driver,
+          withTransaction: <T>(callback: () => Promise<T>) =>
+            driver.withTransaction(async () => {
+              armed = true
+              return await callback()
+            }),
+          get: async (keyHash, now) => {
+            const result = await driver.get(keyHash, now)
+            if (armed) {
+              armed = false
+              await interfere()
+            }
+            return result
           },
         }
       }
@@ -272,6 +302,177 @@ describe(
       }
     })
 
+    await test('a commit writes nothing when another client changed a checked key', async () => {
+      const name = namespace()
+      const other = await Valkeyrie.open(
+        valkeyDriver({ client: connect(), namespace: name }),
+      )
+      const db = await Valkeyrie.open(
+        interfereAfterRead(
+          valkeyDriver({ client: connect(), namespace: name }),
+          () => other.set(['k'], 'other'),
+        ),
+      )
+      try {
+        const { versionstamp } = await db.set(['k'], 'mine')
+        const result = await db
+          .atomic()
+          .check({ key: ['k'], versionstamp })
+          .set(['k'], 'commit')
+          .set(['side'], 'commit')
+          .commit()
+
+        assert.deepStrictEqual(result, { ok: false })
+        assert.strictEqual((await db.get(['k'])).value, 'other')
+        assert.strictEqual((await db.get(['side'])).versionstamp, null)
+      } finally {
+        await db.close()
+        await other.close()
+      }
+    })
+
+    await test('a create-if-absent check fails when another client created the key first', async () => {
+      const name = namespace()
+      const other = await Valkeyrie.open(
+        valkeyDriver({ client: connect(), namespace: name }),
+      )
+      const db = await Valkeyrie.open(
+        interfereAfterRead(
+          valkeyDriver({ client: connect(), namespace: name }),
+          () => other.set(['k'], 'other'),
+        ),
+      )
+      try {
+        const result = await db
+          .atomic()
+          .check({ key: ['k'], versionstamp: null })
+          .set(['k'], 'mine')
+          .commit()
+
+        assert.deepStrictEqual(result, { ok: false })
+        assert.strictEqual((await db.get(['k'])).value, 'other')
+      } finally {
+        await db.close()
+        await other.close()
+      }
+    })
+
+    await test('reads inside a commit see its earlier writes', async () => {
+      const db = await Valkeyrie.open(
+        valkeyDriver({ client: connect(), namespace: namespace() }),
+      )
+      try {
+        assert.ok((await db.atomic().sum(['n'], 1n).sum(['n'], 2n).commit()).ok)
+        assert.deepStrictEqual((await db.get(['n'])).value, new KvU64(3n))
+
+        await db.set(['m'], new KvU64(5n))
+        assert.ok((await db.atomic().delete(['m']).sum(['m'], 1n).commit()).ok)
+        assert.deepStrictEqual((await db.get(['m'])).value, new KvU64(1n))
+      } finally {
+        await db.close()
+      }
+    })
+
+    await test('concurrent commits on one instance run one at a time', async () => {
+      const client = connect()
+      const driver = await valkeyDriver({ client, namespace: namespace() })(
+        v8Serializer,
+      )
+      const db = await Valkeyrie.open(
+        valkeyDriver({ client, namespace: namespace() }),
+      )
+      try {
+        const events: string[] = []
+        const run = (id: number) =>
+          driver.withTransaction(async () => {
+            events.push(`start ${id}`)
+            await setTimeout(20)
+            events.push(`end ${id}`)
+          })
+        await Promise.all([run(1), run(2)])
+        assert.deepStrictEqual(events, ['start 1', 'end 1', 'start 2', 'end 2'])
+
+        const results = await Promise.all([
+          db
+            .atomic()
+            .check({ key: ['a'], versionstamp: null })
+            .set(['a'], 1)
+            .commit(),
+          db
+            .atomic()
+            .check({ key: ['b'], versionstamp: null })
+            .set(['b'], 2)
+            .commit(),
+          ...Array.from({ length: 20 }, () =>
+            db.atomic().sum(['n'], 1n).commit(),
+          ),
+        ])
+        assert.ok(results.every((result) => result.ok))
+        assert.strictEqual((await db.get(['a'])).value, 1)
+        assert.strictEqual((await db.get(['b'])).value, 2)
+        assert.deepStrictEqual((await db.get(['n'])).value, new KvU64(20n))
+      } finally {
+        await driver.close()
+        await db.close()
+      }
+    })
+
+    await test('commits release the keys they watched', async () => {
+      const name = namespace()
+      const other = await Valkeyrie.open(
+        valkeyDriver({ client: connect(), namespace: name }),
+      )
+      const db = await Valkeyrie.open(
+        valkeyDriver({ client: connect(), namespace: name }),
+      )
+      try {
+        // A commit that throws after reading 's'.
+        await db.set(['s'], 'not a number')
+        await assert.rejects(db.atomic().sum(['s'], 1n).commit(), TypeError)
+        // A commit whose check on 'c' fails, so it has nothing to write.
+        await db.set(['c'], 1)
+        assert.deepStrictEqual(
+          await db
+            .atomic()
+            .check({ key: ['c'], versionstamp: '00000000000000000001' })
+            .set(['c'], 2)
+            .commit(),
+          { ok: false },
+        )
+
+        await other.set(['s'], 'changed')
+        await other.set(['c'], 'changed')
+        assert.ok((await db.atomic().set(['x'], 1).commit()).ok)
+      } finally {
+        await db.close()
+        await other.close()
+      }
+    })
+
+    await test('commits share one extra connection, closed with the database', async () => {
+      const client = connect()
+      const duplicates: Redis[] = []
+      const duplicate = client.duplicate.bind(client)
+      client.duplicate = (...args: Parameters<Redis['duplicate']>) => {
+        const connection = duplicate(...args)
+        duplicates.push(connection)
+        return connection
+      }
+      const db = await Valkeyrie.open(
+        valkeyDriver({ client, namespace: namespace() }),
+      )
+      await db.set(['k'], 1)
+      assert.strictEqual(duplicates.length, 0)
+
+      await db.atomic().sum(['n'], 1n).commit()
+      await db.atomic().sum(['n'], 1n).commit()
+      assert.strictEqual(duplicates.length, 1)
+
+      await db.close()
+      await assert.rejects((duplicates[0] as Redis).ping())
+      assert.strictEqual(await client.ping(), 'PONG')
+    })
+
     await test('methods of later tickets throw a clear error', async () => {
       const driver = await valkeyDriver({
         client: connect(),
@@ -282,10 +483,6 @@ describe(
       try {
         await assert.rejects(
           driver.list('', '￿', '', Date.now(), 10),
-          notImplemented,
-        )
-        await assert.rejects(
-          driver.withTransaction(async () => {}),
           notImplemented,
         )
         await assert.rejects(

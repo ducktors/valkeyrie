@@ -8,13 +8,25 @@ import type { TestDriver } from './test-driver.ts'
 export const redisUrl =
   process.env.VALKEYRIE_TEST_REDIS_URL ?? 'redis://localhost:6379'
 
-let client: Redis | undefined
-function getClient(): Redis {
-  client ??= new Redis(redisUrl)
+// Strict client options: commands fail instead of waiting for a connection,
+// and commands sent in the same tick share one round trip.
+let client: Promise<Redis> | undefined
+function getClient(): Promise<Redis> {
+  client ??= (async () => {
+    const redis = new Redis(redisUrl, {
+      lazyConnect: true,
+      enableAutoPipelining: true,
+      enableOfflineQueue: false,
+      maxRetriesPerRequest: 1,
+    })
+    await redis.connect()
+    return redis
+  })()
   return client
 }
 after(async () => {
-  await client?.quit()
+  const redis = await client?.catch(() => undefined)
+  await redis?.quit()
 })
 
 /** Returns a namespace no other test uses. */
@@ -47,24 +59,23 @@ const valkey: TestDriver = {
   name: 'valkey',
   // Each database gets its own namespace, deleted when the database closes.
   open: async (serializer) => {
+    const redis = await getClient()
     const namespace = testNamespace()
-    const driver = await valkeyDriver({ client: getClient(), namespace })(
-      serializer,
-    )
+    const driver = await valkeyDriver({ client: redis, namespace })(serializer)
     return {
       ...driver,
       close: async () => {
         await driver.close()
-        await removeNamespace(getClient(), namespace)
+        await removeNamespace(redis, namespace)
       },
     }
   },
   createPersistentDatabase: () => {
     const namespace = testNamespace()
     return {
-      open: (serializer) =>
-        valkeyDriver({ client: getClient(), namespace })(serializer),
-      remove: () => removeNamespace(getClient(), namespace),
+      open: async (serializer) =>
+        valkeyDriver({ client: await getClient(), namespace })(serializer),
+      remove: async () => removeNamespace(await getClient(), namespace),
     }
   },
 }
