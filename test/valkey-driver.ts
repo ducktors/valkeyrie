@@ -6,6 +6,7 @@ import { KvU64 } from '../src/kv-u64.ts'
 import { jsonSerializer } from '../src/serializers/json.ts'
 import type { Serializer } from '../src/serializers/serializer.ts'
 import { v8Serializer } from '../src/serializers/v8.ts'
+import { sqliteDriver } from '../src/sqlite-driver.ts'
 import { valkeyDriver } from '../src/valkey-driver.ts'
 import { type DriverFactory, type Key, Valkeyrie } from '../src/valkeyrie.ts'
 import { removeNamespace, testNamespace } from './drivers/valkey.ts'
@@ -550,6 +551,166 @@ describe(
       assert.strictEqual(await client.ping(), 'PONG')
     })
 
+    // Raw key hashes, in key order. KEY_A_NUL_B is ['a\0b'] as encoded once
+    // #306 escapes NUL bytes: its bytes start with those of ['a'], then 0xff.
+    const hex = (...bytes: number[]) => Buffer.from(bytes).toString('hex')
+    const KEY_A = hex(0x02, 0x61, 0x00)
+    const KEY_A_B = hex(0x02, 0x61, 0x00, 0x02, 0x62, 0x00)
+    const KEY_A_C = hex(0x02, 0x61, 0x00, 0x02, 0x63, 0x00)
+    const KEY_A_NUL_B = hex(0x02, 0x61, 0x00, 0xff, 0x62, 0x00)
+    const KEY_B = hex(0x02, 0x62, 0x00)
+    const ALL_KEYS = [KEY_A, KEY_A_B, KEY_A_C, KEY_A_NUL_B, KEY_B]
+
+    const BOUND_CASES: {
+      name: string
+      start: string
+      end: string
+      prefix: string
+      expected: string[]
+    }[] = [
+      {
+        name: 'the whole key space',
+        start: '',
+        end: '￿',
+        prefix: '',
+        expected: ALL_KEYS,
+      },
+      {
+        name: 'an inclusive start',
+        start: KEY_A_B,
+        end: '￿',
+        prefix: '',
+        expected: [KEY_A_B, KEY_A_C, KEY_A_NUL_B, KEY_B],
+      },
+      {
+        name: 'a start after a key',
+        start: `${KEY_A_B}\0`,
+        end: '￿',
+        prefix: '',
+        expected: [KEY_A_C, KEY_A_NUL_B, KEY_B],
+      },
+      {
+        name: 'the end of a prefix (0.8.4 form)',
+        start: KEY_A,
+        end: `${KEY_A}\xff`,
+        prefix: KEY_A,
+        expected: [KEY_A_B, KEY_A_C, KEY_A_NUL_B],
+      },
+      {
+        name: 'the end of a prefix (form after #306)',
+        start: KEY_A,
+        end: `${KEY_A}ff`,
+        prefix: KEY_A,
+        expected: [KEY_A_B, KEY_A_C],
+      },
+      {
+        name: 'an exclusive end',
+        start: '',
+        end: KEY_A_C,
+        prefix: '',
+        expected: [KEY_A, KEY_A_B],
+      },
+    ]
+
+    await test('list bounds select the same keys as on SQLite', async () => {
+      const valkey = await valkeyDriver({
+        client: connect(),
+        namespace: namespace(),
+      })(v8Serializer)
+      const sqlite = await sqliteDriver(':memory:', v8Serializer)
+      try {
+        for (const keyHash of ALL_KEYS) {
+          await valkey.set(keyHash, keyHash, '0'.repeat(20))
+          await sqlite.set(keyHash, keyHash, '0'.repeat(20))
+        }
+        const now = Date.now()
+        for (const { name, start, end, prefix, expected } of BOUND_CASES) {
+          for (const reverse of [false, true]) {
+            const order = reverse ? expected.toReversed() : expected
+            const label = `${name}${reverse ? ', reversed' : ''}`
+            const fromSqlite = await sqlite.list(
+              start,
+              end,
+              prefix,
+              now,
+              10,
+              reverse,
+            )
+            const fromValkey = await valkey.list(
+              start,
+              end,
+              prefix,
+              now,
+              10,
+              reverse,
+            )
+            assert.deepStrictEqual(
+              fromSqlite.map((e) => e.keyHash),
+              order,
+              `SQLite: ${label}`,
+            )
+            assert.deepStrictEqual(fromValkey, fromSqlite, `Valkey: ${label}`)
+            assert.deepStrictEqual(
+              await valkey.list(start, end, prefix, now, 1, reverse),
+              fromSqlite.slice(0, 1),
+              `Valkey, limit 1: ${label}`,
+            )
+          }
+        }
+      } finally {
+        await valkey.close()
+        await sqlite.close()
+      }
+    })
+
+    await test('list skips index members whose entry is gone or expired', async () => {
+      const name = namespace()
+      const driver = await valkeyDriver({ client: connect(), namespace: name })(
+        v8Serializer,
+      )
+      const entryKey = (keyHash: string) =>
+        Buffer.concat([
+          Buffer.from(`{${name}}:e:`),
+          Buffer.from(keyHash, 'hex'),
+        ])
+      try {
+        const keyHashes = Array.from({ length: 10 }, (_, i) =>
+          hex(0x04, i, 0x00),
+        )
+        for (const keyHash of keyHashes) {
+          await driver.set(keyHash, keyHash, '0'.repeat(20))
+        }
+        // Entries 0-3 disappear behind the driver's back, as on eviction.
+        await admin.unlink(...keyHashes.slice(0, 4).map(entryKey))
+        // Entries 4-6 have expired.
+        for (const keyHash of keyHashes.slice(4, 7)) {
+          const entry = (await admin.getBuffer(entryKey(keyHash))) as Buffer
+          entry.writeBigUInt64BE(BigInt(Date.now() - 1000), 10)
+          await admin.set(entryKey(keyHash), entry)
+        }
+        const now = Date.now()
+
+        // The first index read finds only missing or expired entries, so
+        // filling the limit takes more reads.
+        const forward = await driver.list('', '￿', '', now, 2)
+        assert.deepStrictEqual(
+          forward.map((e) => e.keyHash),
+          keyHashes.slice(7, 9),
+        )
+        assert.deepStrictEqual(
+          forward.map((e) => e.value),
+          keyHashes.slice(7, 9),
+        )
+        const reverse = await driver.list('', '￿', '', now, 10, true)
+        assert.deepStrictEqual(
+          reverse.map((e) => e.keyHash),
+          keyHashes.slice(7).toReversed(),
+        )
+      } finally {
+        await driver.close()
+      }
+    })
+
     await test('methods of later tickets throw a clear error', async () => {
       const driver = await valkeyDriver({
         client: connect(),
@@ -558,10 +719,6 @@ describe(
       const notImplemented = /not implemented yet/
       const keyHash = Buffer.from([0x02, 0x6b, 0x00]).toString('hex')
       try {
-        await assert.rejects(
-          driver.list('', '￿', '', Date.now(), 10),
-          notImplemented,
-        )
         await assert.rejects(
           driver.set(keyHash, 'v', '0'.repeat(20), Date.now() + 1000),
           notImplemented,

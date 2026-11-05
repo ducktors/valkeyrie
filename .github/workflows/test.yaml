@@ -92,9 +92,9 @@ jobs:
           version: ${{ env.PNPM_VERSION }}
       - name: Install with pnpm
         run: pnpm install
-      # The driver has no list or expiry yet: skip the tests that need them.
+      # The driver has no expiry, watch or clear yet: skip the tests that need them.
       - name: Run the shared suite and the driver tests
         run: >-
           node --test
-          --test-skip-pattern="/^list|key ordering|operation size limit|expiration|watch|clear removes all data/"
+          --test-skip-pattern="/expiration|watch|clear removes all data/"
           ./test/valkeyrie.ts ./test/valkey-driver.ts

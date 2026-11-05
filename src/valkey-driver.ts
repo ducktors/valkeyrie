@@ -39,6 +39,9 @@ const HEADER_BYTES = VERSIONSTAMP_BYTES + 8
 // How often a commit runs again on fresh data after a watched key changed.
 const COMMIT_ATTEMPTS = 10
 
+// The most index members `list` reads at once.
+const LIST_PAGE_SIZE = 1000
+
 function notImplemented(method: string): Error {
   return new Error(`valkeyDriver: ${method} is not implemented yet`)
 }
@@ -75,6 +78,79 @@ function createLock(): <T>(task: () => Promise<T>) => Promise<T> {
     tail = result.catch(() => {})
     return result
   }
+}
+
+// List bounds. Valkeyrie compares hex key strings with bound strings, as the
+// SQLite driver does. A bound is a key's hex, optionally followed by one
+// character that sorts before every hex digit ('\0': just after that key) or
+// after them ('\xff', '\uffff': past that key and every key it starts).
+// These helpers turn a bound into the raw-byte bound ZRANGEBYLEX takes, or
+// null when no key is on the right side of it.
+type BoundPosition = 'at' | 'after' | 'past'
+
+function parseBound(bound: string): {
+  bytes: Buffer
+  position: BoundPosition
+} {
+  const hex = /^(?:[0-9a-f]{2})*/.exec(bound)?.[0] ?? ''
+  const next = bound.charAt(hex.length)
+  const bytes = Buffer.from(hex, 'hex')
+  if (next === '') {
+    return { bytes, position: 'at' }
+  }
+  if (next < '0') {
+    return { bytes, position: 'after' }
+  }
+  if (next > 'f') {
+    return { bytes, position: 'past' }
+  }
+  throw new TypeError(
+    `valkeyDriver: unsupported list bound ${JSON.stringify(bound)}`,
+  )
+}
+
+// The smallest byte string above every string that starts with `bytes`, or
+// null when there is none.
+function successor(bytes: Buffer): Buffer | null {
+  let end = bytes.length
+  while (end > 0 && bytes[end - 1] === 0xff) {
+    end--
+  }
+  if (end === 0) {
+    return null
+  }
+  const next = Buffer.from(bytes.subarray(0, end))
+  next[end - 1] = (next[end - 1] as number) + 1
+  return next
+}
+
+const inclusive = (bytes: Buffer) => Buffer.concat([Buffer.from('['), bytes])
+const exclusive = (bytes: Buffer) => Buffer.concat([Buffer.from('('), bytes])
+
+// The ZRANGEBYLEX bound for keys at or above `bound`.
+function lowerBound(bound: string): Buffer | string | null {
+  const { bytes, position } = parseBound(bound)
+  if (position === 'at') {
+    return bytes.length === 0 ? '-' : inclusive(bytes)
+  }
+  if (position === 'after') {
+    return exclusive(bytes)
+  }
+  const next = successor(bytes)
+  return next === null ? null : inclusive(next)
+}
+
+// The ZRANGEBYLEX bound for keys below `bound`.
+function upperBound(bound: string): Buffer | string | null {
+  const { bytes, position } = parseBound(bound)
+  if (position === 'at') {
+    return bytes.length === 0 ? null : exclusive(bytes)
+  }
+  if (position === 'after') {
+    return inclusive(bytes)
+  }
+  const next = successor(bytes)
+  return next === null ? '+' : exclusive(next)
 }
 
 async function connectDuplicate(client: Client): Promise<Client> {
@@ -279,8 +355,66 @@ export function valkeyDriver({
           }
         })
       },
-      list: async () => {
-        throw notImplemented('list')
+      // Reads the index in key order and fetches the entries with MGET. It
+      // skips the prefix key itself and members whose entry has expired or is
+      // gone, and reads on until it has `limit` entries or the range ends.
+      list: async (
+        startHash,
+        endHash,
+        prefixHash,
+        now,
+        limit,
+        reverse = false,
+      ) => {
+        const results: DriverValue[] = []
+        const min = lowerBound(startHash)
+        const max = upperBound(endHash)
+        if (min === null || max === null) {
+          return results
+        }
+        // The bound that moves past each page read.
+        let from = reverse ? max : min
+        const to = reverse ? min : max
+        while (results.length < limit) {
+          const count = Math.min(limit - results.length, LIST_PAGE_SIZE)
+          const members = reverse
+            ? await client.zrevrangebylexBuffer(
+                indexKey,
+                from,
+                to,
+                'LIMIT',
+                0,
+                count,
+              )
+            : await client.zrangebylexBuffer(
+                indexKey,
+                from,
+                to,
+                'LIMIT',
+                0,
+                count,
+              )
+          const keyHashes = members
+            .map((member) => member.toString('hex'))
+            .filter((keyHash) => keyHash !== prefixHash)
+          const entries =
+            keyHashes.length === 0
+              ? []
+              : await client.mgetBuffer(...keyHashes.map(entryKey))
+          for (const [index, keyHash] of keyHashes.entries()) {
+            const entry = entries[index]
+            const value = entry ? decode(keyHash, entry, now) : undefined
+            if (value !== undefined) {
+              results.push(value)
+            }
+          }
+          const last = members.at(-1)
+          if (members.length < count || last === undefined) {
+            break
+          }
+          from = exclusive(last)
+        }
+        return results
       },
       // Nothing can expire until expiry is implemented.
       cleanup: async () => {},
