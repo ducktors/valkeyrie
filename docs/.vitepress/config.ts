@@ -4,15 +4,15 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'Valkeyrie',
   description: 'Type-safe key-value store with atomic transactions, Standard Schema validation and pluggable drivers',
-  base: '/Valkeyrie/',
+  base: '/valkeyrie/',
 
   head: [
-    ['link', { rel: 'icon', type: 'image/png', href: '/Valkeyrie/logo.png' }],
+    ['link', { rel: 'icon', type: 'image/png', href: '/valkeyrie/logo.png' }],
     ['meta', { name: 'theme-color', content: '#d97706' }],
     ['meta', { name: 'og:type', content: 'website' }],
     ['meta', { name: 'og:locale', content: 'en' }],
     ['meta', { name: 'og:site_name', content: 'Valkeyrie' }],
-    ['meta', { name: 'og:image', content: 'https://ducktors.github.io/Valkeyrie/logo.png' }],
+    ['meta', { name: 'og:image', content: 'https://ducktors.github.io/valkeyrie/logo.png' }],
   ],
 
   themeConfig: {
