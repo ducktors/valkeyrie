@@ -37,6 +37,12 @@ Feature-specific guides for different use cases:
   - Creating custom serializers
   - Migration between serializers
 
+- **[Valkey and Redis Driver](./guides/valkey-driver.md)**
+  - Sharing a database between processes
+  - Client ownership and namespaces
+  - Expiry, cleanup and memory policy
+  - Atomic commits and `watch()` across processes
+
 - **[Advanced Patterns](./guides/advanced-patterns.md)**
   - **Watch API** - Real-time key monitoring
   - Atomic operations
@@ -185,6 +191,7 @@ docs/
 │   ├── schema-validation.md    # Type safety guide
 │   ├── factory-methods.md      # Data import guide
 │   ├── serializers.md          # Serialization guide
+│   ├── valkey-driver.md        # Valkey and Redis driver
 │   └── advanced-patterns.md    # Advanced features
 └── api/                         # API reference
     ├── api-reference.md        # Method reference

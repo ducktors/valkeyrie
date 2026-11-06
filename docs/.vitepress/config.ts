@@ -38,6 +38,7 @@ export default defineConfig({
             { text: 'Schema Validation', link: '/guides/schema-validation' },
             { text: 'Factory Methods', link: '/guides/factory-methods' },
             { text: 'Serializers', link: '/guides/serializers' },
+            { text: 'Valkey and Redis Driver', link: '/guides/valkey-driver' },
             { text: 'Advanced Patterns', link: '/guides/advanced-patterns' },
           ]
         }
