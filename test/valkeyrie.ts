@@ -244,6 +244,12 @@ describe('test valkeyrie', async () => {
     ['a', new Uint8Array([1, 2, 3])],
     ['a', new Uint8Array([1, 2, 3]), 'b'],
     [1, 1n, true, new Uint8Array([1, 2, 3]), 'a'],
+    ['\0'],
+    ['a\0b'],
+    ['a\0', 'b'],
+    [new Uint8Array([0])],
+    [new Uint8Array([1, 0, 2, 0x79])],
+    ['a', new Uint8Array([0, 0xff, 0]), 'b'],
   ]
 
   for (const key of keys) {
@@ -254,6 +260,64 @@ describe('test valkeyrie', async () => {
       assert.deepEqual(result.value, 'b')
     })
   }
+
+  await dbTest(
+    'keys whose parts hold a NUL byte do not alias other keys',
+    async (db) => {
+      await db.set(['r', 'x\0\x02y'], 'one string part')
+      await db.set(['r', new Uint8Array([1, 0, 2, 0x79])], 'one bytes part')
+
+      assert.deepEqual(await db.get(['r', 'x', 'y']), {
+        key: ['r', 'x', 'y'],
+        value: null,
+        versionstamp: null,
+      })
+      assert.deepEqual(await db.get(['r', new Uint8Array([1]), 'y']), {
+        key: ['r', new Uint8Array([1]), 'y'],
+        value: null,
+        versionstamp: null,
+      })
+    },
+  )
+
+  await dbTest(
+    'list prefix does not return a key whose last part only starts with the prefix part and a NUL',
+    async (db) => {
+      await db.set(['a', 'b'], 'child')
+      await db.set(['a\0'], 'sibling')
+      await db.set(['a\0b'], 'sibling')
+      await db.set([new Uint8Array([1])], 'bytes')
+      await db.set([new Uint8Array([1, 0])], 'bytes sibling')
+
+      const strings = await Array.fromAsync(db.list({ prefix: ['a'] }))
+      const bytes = await Array.fromAsync(
+        db.list({ prefix: [new Uint8Array([1])] }),
+      )
+
+      assert.deepEqual(
+        strings.map((entry) => entry.key),
+        [['a', 'b']],
+      )
+      assert.deepEqual(bytes, [])
+    },
+  )
+
+  await dbTest(
+    'keys with a NUL byte sort after the same text without it',
+    async (db) => {
+      await db.set(['a\x01'], 4)
+      await db.set(['a\0\0'], 3)
+      await db.set(['a\0'], 2)
+      await db.set(['a'], 1)
+
+      const entries = await Array.fromAsync(db.list({ prefix: [] }))
+
+      assert.deepEqual(
+        entries.map((entry) => entry.key),
+        [['a'], ['a\0'], ['a\0\0'], ['a\x01']],
+      )
+    },
+  )
 
   const INVALID_KEYS = [
     [null],

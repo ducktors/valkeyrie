@@ -110,6 +110,64 @@ export type EntryMaybe<T = unknown> =
  *
  * @template TRegistry - Compile-time schema registry for automatic type inference
  */
+/**
+ * Escapes each 0x00 byte of a string or Uint8Array key part as 0x00 0xFF, as
+ * the FoundationDB tuple layer and Deno KV do. The 0x00 terminator then always
+ * ends the part, so a part with a NUL byte cannot alias another key, and keys
+ * keep their byte order.
+ *
+ * @param bytes - The bytes of the key part.
+ * @returns The escaped bytes.
+ */
+function escapeNulBytes(bytes: Uint8Array): Buffer {
+  const nulCount = bytes.reduce(
+    (count, byte) => (byte === 0x00 ? count + 1 : count),
+    0,
+  )
+  if (nulCount === 0) return Buffer.from(bytes)
+  const escaped = Buffer.alloc(bytes.length + nulCount)
+  let pos = 0
+  for (const byte of bytes) {
+    escaped[pos++] = byte
+    if (byte === 0x00) escaped[pos++] = 0xff
+  }
+  return escaped
+}
+
+/**
+ * Reads an escaped string or Uint8Array key part up to its 0x00 terminator,
+ * and turns each 0x00 0xFF back into 0x00. No type marker is 0xFF, so a 0x00
+ * before 0xFF is always an escaped byte.
+ *
+ * @param buffer - The encoded key.
+ * @param start - The position of the first byte of the part.
+ * @param type - The type of the part, for the error message.
+ * @returns The bytes of the part and the position after its terminator.
+ * @throws {Error} If the part has no terminator.
+ */
+function readEscapedPart(
+  buffer: Buffer,
+  start: number,
+  type: 'Uint8Array' | 'String',
+): { bytes: Buffer; next: number } {
+  const chunks: Buffer[] = []
+  let chunkStart = start
+  let pos = start
+  while (pos < buffer.length) {
+    if (buffer[pos] !== 0x00) {
+      pos++
+    } else if (buffer[pos + 1] === 0xff) {
+      chunks.push(buffer.subarray(chunkStart, pos + 1))
+      pos += 2
+      chunkStart = pos
+    } else {
+      chunks.push(buffer.subarray(chunkStart, pos))
+      return { bytes: Buffer.concat(chunks), next: pos + 1 }
+    }
+  }
+  throw new Error(`Invalid key hash: unterminated ${type}`)
+}
+
 export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
   #driver: Driver
   #isClosed = false
@@ -610,11 +668,14 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
    * Generates a hash for a given key. This method is crucial for indexing and storing keys in the database.
    * It converts each part of the key into a specific byte format based on its type, following Deno.KV's encoding format.
    * The format for each type is as follows:
-   * - Uint8Array: 0x01 + bytes + 0x00
-   * - String: 0x02 + utf8 bytes + 0x00
+   * - Uint8Array: 0x01 + escaped bytes + 0x00
+   * - String: 0x02 + escaped utf8 bytes + 0x00
    * - BigInt: 0x03 + 8 bytes int64 + 0x00
    * - Number: 0x04 + 8 bytes double + 0x00
    * - Boolean: 0x05 + single byte + 0x00
+   *
+   * An escaped part writes each 0x00 byte as 0x00 0xFF, so the 0x00 terminator
+   * always ends the part.
    *
    * After converting each part, they are concatenated with a null byte delimiter to form the full key.
    * This method ensures that keys are consistently formatted and can be reliably hashed for storage and retrieval.
@@ -631,14 +692,15 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
       let bytes: Buffer
 
       if (part instanceof Uint8Array) {
-        // Uint8Array format: 0x01 + bytes + 0x00
-        bytes = Buffer.alloc(part.length + 2)
+        // Uint8Array format: 0x01 + escaped bytes + 0x00
+        const escaped = escapeNulBytes(part)
+        bytes = Buffer.alloc(escaped.length + 2)
         bytes[0] = 0x01 // Uint8Array type marker
-        Buffer.from(part).copy(bytes, 1)
+        escaped.copy(bytes, 1)
         bytes[bytes.length - 1] = 0x00
       } else if (typeof part === 'string') {
-        // String format: 0x02 + utf8 bytes + 0x00
-        const strBytes = Buffer.from(part, 'utf8')
+        // String format: 0x02 + escaped utf8 bytes + 0x00
+        const strBytes = escapeNulBytes(Buffer.from(part, 'utf8'))
         bytes = Buffer.alloc(strBytes.length + 2)
         bytes[0] = 0x02 // String type marker
         strBytes.copy(bytes, 1)
@@ -707,8 +769,8 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
    * Decodes a base64-encoded key hash back into its original key parts.
    * This method reverses the encoding process performed by hashKey.
    * It handles the following formats:
-   * - Uint8Array: 0x01 + bytes + 0x00
-   * - String: 0x02 + utf8 bytes + 0x00
+   * - Uint8Array: 0x01 + escaped bytes + 0x00
+   * - String: 0x02 + escaped utf8 bytes + 0x00
    * - BigInt: 0x03 + 8 bytes int64 + 0x00
    * - Number: 0x04 + 8 bytes double + 0x00
    * - Boolean: 0x05 + single byte + 0x00
@@ -729,50 +791,16 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
       switch (typeMarker) {
         case 0x01: {
           // Uint8Array
-          let end = pos
-          // Find the terminator (0x00) that marks the end of the Uint8Array
-          // We need to scan for it rather than stopping at the first 0 value
-          // since the Uint8Array itself might contain zeros
-          while (end < buffer.length) {
-            // Check if this position is the terminator
-            if (buffer[end] === 0x00) {
-              const nextPos = end + 1
-              // Check if we're at the end of the buffer
-              if (nextPos >= buffer.length) {
-                break
-              }
-
-              // Check if the next byte is a valid type marker
-              const nextByte = buffer[nextPos]
-              if (
-                nextByte === 0x01 ||
-                nextByte === 0x02 ||
-                nextByte === 0x03 ||
-                nextByte === 0x04 ||
-                nextByte === 0x05
-              ) {
-                break
-              }
-            }
-            end++
-          }
-
-          if (end >= buffer.length)
-            throw new Error('Invalid key hash: unterminated Uint8Array')
-          const bytes = buffer.subarray(pos, end)
+          const { bytes, next } = readEscapedPart(buffer, pos, 'Uint8Array')
           parts.push(new Uint8Array(bytes))
-          pos = end + 1
+          pos = next
           break
         }
         case 0x02: {
           // String
-          let end = pos
-          while (end < buffer.length && buffer[end] !== 0x00) end++
-          if (end >= buffer.length)
-            throw new Error('Invalid key hash: unterminated String')
-          const str = buffer.subarray(pos, end).toString('utf8')
-          parts.push(str)
-          pos = end + 1
+          const { bytes, next } = readEscapedPart(buffer, pos, 'String')
+          parts.push(bytes.toString('utf8'))
+          pos = next
           break
         }
         case 0x03: {
@@ -1019,12 +1047,15 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
 
       return reverse
         ? { startHash: prefixHash, endHash: cursorHash }
-        : { startHash: `${cursorHash}\0`, endHash: `${prefixHash}\xff` }
+        : { startHash: `${cursorHash}\0`, endHash: `${prefixHash}ff` }
     }
 
+    // A child key continues the prefix with a type marker (01 to 05). An
+    // escaped NUL (00 ff) continues the last part of the prefix itself, so
+    // the range ends before `ff`.
     return {
       startHash: prefixHash,
-      endHash: `${prefixHash}\xff`,
+      endHash: `${prefixHash}ff`,
     }
   }
 
