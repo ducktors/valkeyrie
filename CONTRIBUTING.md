@@ -76,6 +76,12 @@ pnpm test
 pnpm lint
 ```
 
+The tests run on the built-in SQLite driver. To run them on another driver, set `VALKEYRIE_TEST_DRIVER` to a driver name from `test/drivers` or to the path of a module that default-exports a `TestDriver` (see `test/drivers/test-driver.ts`). Tests that only apply to SQLite are skipped on other drivers.
+
+```bash
+VALKEYRIE_TEST_DRIVER=./my-driver.ts pnpm test
+```
+
 ### Coding Standards
 
 - Follow the existing code style
