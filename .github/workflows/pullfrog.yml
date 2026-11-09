@@ -26,7 +26,7 @@ jobs:
         with:
           fetch-depth: 1
       - name: Run agent
-        uses: pullfrog/pullfrog@e78ef9012f375d522bd40efe9e9357cb81eae1a1 # v0
+        uses: pullfrog/pullfrog@cb3bda7d56a8728500c37e1eda718271e7ec4616 # v0
         with:
           prompt: ${{ inputs.prompt }}
         env:
