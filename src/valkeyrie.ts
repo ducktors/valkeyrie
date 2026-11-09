@@ -294,7 +294,12 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
       constructorOptions,
       kValkeyrie,
     )
-    await db.cleanup()
+    try {
+      await db.cleanup()
+    } catch (error) {
+      await db.#closeDriver()
+      throw error
+    }
     return db
   }
 
@@ -392,9 +397,6 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
       onErrorCallback,
     } = options
 
-    // Validate prefix
-    db.validateKeys([prefix] as unknown[])
-
     const errors: Array<{ error: Error; item: T }> = []
     let processed = 0
     let currentBatch: Array<{ key: Key; value: T }> = []
@@ -414,6 +416,9 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
     }
 
     try {
+      // Validate prefix
+      db.validateKeys([prefix] as unknown[])
+
       for (const item of iterable) {
         try {
           // Extract key part and construct full key
@@ -452,8 +457,8 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
 
       return db
     } catch (error) {
-      // Close and clean up on error
-      await db.close()
+      // Release the driver but never destroy: the store may hold pre-existing data
+      await db.#closeDriver()
       throw error
     }
   }
@@ -526,9 +531,6 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
       onErrorCallback,
     } = options
 
-    // Validate prefix
-    db.validateKeys([prefix] as unknown[])
-
     const errors: Array<{ error: Error; item: T }> = []
     let processed = 0
     let currentBatch: Array<{ key: Key; value: T }> = []
@@ -548,6 +550,9 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
     }
 
     try {
+      // Validate prefix
+      db.validateKeys([prefix] as unknown[])
+
       for await (const item of iterable) {
         try {
           // Extract key part and construct full key
@@ -587,8 +592,8 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
 
       return db
     } catch (error) {
-      // Close and clean up on error
-      await db.close()
+      // Release the driver but never destroy: the store may hold pre-existing data
+      await db.#closeDriver()
       throw error
     }
   }
@@ -599,6 +604,20 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
     }
     await this.#driver.close()
     this.#isClosed = true
+  }
+
+  /**
+   * Best-effort release of the driver when open/from fails, without honouring
+   * destroyOnClose. Never throws, so the error that caused the failure surfaces.
+   */
+  async #closeDriver(): Promise<void> {
+    try {
+      await this.#driver.close()
+    } catch {
+      // Ignore: the caller is already rethrowing the more useful original error
+    } finally {
+      this.#isClosed = true
+    }
   }
 
   /**
@@ -1274,7 +1293,7 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
   public async cleanup(): Promise<void> {
     this.throwIfClosed()
     const now = Date.now()
-    this.#driver.cleanup(now)
+    await this.#driver.cleanup(now)
   }
 
   public atomic(): AtomicOperation<TRegistry> {
