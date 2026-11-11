@@ -8,6 +8,7 @@ import { setTimeout } from 'node:timers/promises'
 import { inspect } from 'node:util'
 import type { StandardSchemaV1 } from '@standard-schema/spec'
 import type { Driver } from '../src/driver.ts'
+import { decodeKey } from '../src/key-codec.ts'
 import { KvU64 } from '../src/kv-u64.ts'
 import { jsonSerializer } from '../src/serializers/json.ts'
 import type { Serializer } from '../src/serializers/serializer.ts'
@@ -2338,19 +2339,14 @@ describe('test valkeyrie', async () => {
     )
   })
 
-  await dbTest('decodeKeyHash throws on invalid type marker', async (db) => {
+  await test('decodeKey throws on invalid type marker', () => {
     // Create an invalid key hash with an unknown type marker (0x06)
     const invalidKeyHash = Buffer.from([0x06, 0x01, 0x02, 0x00]).toString('hex')
 
-    assert.throws(
-      () =>
-        // @ts-expect-error Accessing private method for testing
-        db.decodeKeyHash(invalidKeyHash),
-      {
-        name: 'Error',
-        message: /Invalid key hash: unknown type marker 0x6/,
-      },
-    )
+    assert.throws(() => decodeKey(invalidKeyHash), {
+      name: 'Error',
+      message: /Invalid key hash: unknown type marker 0x6/,
+    })
   })
 
   await dbTest('get method with empty key', async (db) => {
