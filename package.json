@@ -19,6 +19,10 @@
       "types": "./dist/driver.d.ts",
       "default": "./dist/driver.js"
     },
+    "./migrate": {
+      "types": "./dist/migrate.d.ts",
+      "default": "./dist/migrate.js"
+    },
     "./serializers": {
       "types": "./dist/serializers/serializer.d.ts",
       "default": "./dist/serializers/serializer.js"
@@ -116,6 +120,7 @@
     "typescript": "^5.8.2",
     "valibot": "^1.2.0",
     "validate-package-exports": "^1.0.1",
+    "valkeyrie-legacy": "npm:valkeyrie@0.8.4",
     "vitepress": "^1.6.4",
     "zod": "^4.1.12"
   },

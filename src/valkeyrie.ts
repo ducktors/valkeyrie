@@ -1,7 +1,8 @@
 import { serialize } from 'node:v8'
 import type { StandardSchemaV1 } from '@standard-schema/spec'
 import type { Driver } from './driver.ts'
-import { decodeKey, encodeKey } from './key-codec.ts'
+import { KEY_HASH_END, decodeKey, encodeKey } from './key-codec.ts'
+import { checkKeyFormat, writeKeyFormat } from './key-format.ts'
 import { KvU64 } from './kv-u64.ts'
 import type { SchemaRegistry } from './schema-registry.ts'
 import { validateReservedKeyParts, validateValue } from './schema-validator.ts'
@@ -21,6 +22,8 @@ import type {
   SchemaRegistry as SchemaRegistryType,
 } from './types/schema-registry-types.ts'
 import { ValkeyrieBuilder } from './valkeyrie-builder.ts'
+
+export { KeyFormatError } from './key-format-error.ts'
 
 export type KeyPart = Uint8Array | string | number | bigint | boolean | symbol
 export type Key = readonly KeyPart[]
@@ -238,6 +241,9 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
       kValkeyrie,
     )
     try {
+      // Check the key format first: with another format, a key can address
+      // another entry
+      await checkKeyFormat(db.#driver)
       await db.cleanup()
     } catch (error) {
       await db.#closeDriver()
@@ -579,6 +585,9 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
    */
   public async clear(): Promise<void> {
     await this.#driver.clear()
+    // The driver also deletes the key format row; write it again so that the
+    // next open() finds it
+    await writeKeyFormat(this.#driver)
   }
 
   /**
@@ -876,12 +885,13 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
 
       return reverse
         ? { startHash: '', endHash: cursorHash }
-        : { startHash: `${cursorHash}\0`, endHash: '\uffff' }
+        : { startHash: `${cursorHash}\0`, endHash: KEY_HASH_END }
     }
 
+    // KEY_HASH_END is above every key and below the key format row
     return {
       startHash: '',
-      endHash: '\uffff',
+      endHash: KEY_HASH_END,
     }
   }
 

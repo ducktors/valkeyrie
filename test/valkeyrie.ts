@@ -3202,6 +3202,9 @@ describe('test valkeyrie', async () => {
     }
 
     const db = await Valkeyrie.open(createSpyDriverFn(spy))
+    // open() reads and writes the key format row: count only the calls below
+    spy.setCalls = 0
+    spy.getCalls = 0
 
     try {
       await db.set(['greeting'], 'hello')

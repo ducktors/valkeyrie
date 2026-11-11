@@ -1,6 +1,12 @@
 import type { Key, KeyPart } from './valkeyrie.ts'
 
 /**
+ * A hex list bound above every key hash. A key hash starts with a type marker
+ * from 0x01 to 0x05, and no type marker is 0xFF.
+ */
+export const KEY_HASH_END = 'ff'
+
+/**
  * Escapes each 0x00 byte of a string or Uint8Array key part as 0x00 0xFF, as
  * the FoundationDB tuple layer and Deno KV do. The 0x00 terminator then always
  * ends the part, so a part with a NUL byte cannot alias another key, and keys
