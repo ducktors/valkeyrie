@@ -238,9 +238,10 @@ async function removeSqliteFiles(path: string): Promise<void> {
  * cannot be migrated.
  * @returns The number of copied rows, the number of rows with a new key hash,
  * and the rows that were not copied.
- * @throws {Error} If the target exists, the source has a key format row, or a
- * row cannot be migrated and `skipUnmigratable` is not set. The migration then
- * creates no target.
+ * @throws {Error} If the target exists, the source has a key format row, a row
+ * cannot be migrated and `skipUnmigratable` is not set, or the migration cannot
+ * create or write the target. The migration then leaves no target files, so
+ * you can run it again with the same target path.
  */
 export async function migrateSqliteKeyFormat(
   sourcePath: string,
@@ -288,18 +289,21 @@ export async function migrateSqliteKeyFormat(
     }
     const skippedHashes = new Set(skipped.map((row) => row.keyHash))
 
-    // An empty store gets the key format row with the serializer of the store
     const openOptions: { serializer?: () => Serializer } = {}
     if (options.serializer !== undefined) {
       openOptions.serializer = options.serializer
     }
-    const targetStore = await Valkeyrie.open(targetPath, openOptions)
-    await targetStore.close()
-
-    const target = new DatabaseSync(targetPath)
+    let target: DatabaseSync | undefined
     let migrated = 0
     let rekeyed = 0
     try {
+      // An empty store gets the key format row with the serializer of the
+      // store. The driver creates the file before it calls the serializer, so
+      // this step can also fail after the file exists.
+      const targetStore = await Valkeyrie.open(targetPath, openOptions)
+      await targetStore.close()
+
+      target = new DatabaseSync(targetPath)
       target.exec('BEGIN IMMEDIATE TRANSACTION')
       // INSERT, not INSERT OR REPLACE: two rows with one new hash stop the
       // migration instead of losing a row
@@ -315,12 +319,14 @@ export async function migrateSqliteKeyFormat(
       }
       target.exec('COMMIT')
     } catch (error) {
-      try {
-        target.exec('ROLLBACK')
-      } catch {
-        // Ignore: no transaction is open
+      if (target !== undefined) {
+        try {
+          target.exec('ROLLBACK')
+        } catch {
+          // Ignore: no transaction is open
+        }
+        target.close()
       }
-      target.close()
       await removeSqliteFiles(targetPath)
       throw error
     }

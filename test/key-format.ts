@@ -399,6 +399,34 @@ describe('key format', async () => {
     })
   })
 
+  await test('migrateSqliteKeyFormat() should throw when it cannot create the target store, and leaves no target files', async () => {
+    await withStores(async (source, target) => {
+      const legacy = await LegacyValkeyrie.open(source)
+      await legacy.set(['a'], 'value')
+      await legacy.close()
+
+      await assert.rejects(
+        migrateSqliteKeyFormat(source, target, {
+          serializer: () => {
+            throw new Error('serializer failed')
+          },
+        }),
+        new Error('serializer failed'),
+      )
+      assert.deepStrictEqual(
+        [target, `${target}-shm`, `${target}-wal`].filter((path) =>
+          existsSync(path),
+        ),
+        [],
+      )
+      assert.deepStrictEqual(await migrateSqliteKeyFormat(source, target), {
+        migrated: 1,
+        rekeyed: 0,
+        skipped: [],
+      })
+    })
+  })
+
   await test('migrateSqliteKeyFormat() with skipUnmigratable copies the other rows and reports the skipped rows', async () => {
     await withStores(async (source, target) => {
       const legacy = await LegacyValkeyrie.open(source)
