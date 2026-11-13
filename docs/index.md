@@ -38,7 +38,7 @@ features:
 
   - icon: 🔌
     title: Pluggable Storage Drivers
-    details: Built on SQLite with a driver architecture designed for extensibility. Custom drivers are already accessible by passing a driver function to the public `open()` API and via the `driverFn` option in factory methods. More built-in drivers coming soon.
+    details: SQLite by default, and a Valkey and Redis driver for databases that several processes share. Custom drivers are accessible by passing a driver function to the public `open()` API and via the `driverFn` option in factory methods.
 
   - icon: 🔒
     title: Multi-instance Safe

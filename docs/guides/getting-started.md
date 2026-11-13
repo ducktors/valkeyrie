@@ -60,7 +60,7 @@ await db.close();
 
 ### Custom Driver
 
-Advanced users can supply a fully custom storage backend by passing a driver function to `Valkeyrie.open()` (or via the `driverFn` option in factory methods) instead of a file path. The `Driver` type and `defineDriver` helper for implementing a backend are exported from `'valkeyrie/driver'`. See the [API Reference](../api/api-reference.md#valkeyrieopen) for details. For the built-in SQLite backend, just pass a path (or nothing) to `Valkeyrie.open()`.
+Advanced users can supply a fully custom storage backend by passing a driver function to `Valkeyrie.open()` (or via the `driverFn` option in factory methods) instead of a file path. The `Driver` type and `defineDriver` helper for implementing a backend are exported from `'valkeyrie/driver'`. See the [API Reference](../api/api-reference.md#valkeyrieopen) for details. For the built-in SQLite backend, just pass a path (or nothing) to `Valkeyrie.open()`. To share a database between processes, use the [Valkey and Redis driver](./valkey-driver.md).
 
 ### File-Based Database
 

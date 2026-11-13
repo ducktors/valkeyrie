@@ -20,6 +20,7 @@ import {
   type Mutation,
   Valkeyrie,
 } from '../src/valkeyrie.ts'
+import { sqliteOnly, testDriver } from './drivers/test-driver.ts'
 
 /**
  * A spy that wraps the built-in in-memory SQLite driver so tests can assert the
@@ -108,7 +109,7 @@ describe('test valkeyrie', async () => {
     fn: (db: Valkeyrie) => Promise<void> | void,
   ) {
     await test(name, async () => {
-      const db: Valkeyrie = await Valkeyrie.open()
+      const db: Valkeyrie = await Valkeyrie.open(testDriver.open)
       try {
         await fn(db)
       } finally {
@@ -1928,7 +1929,7 @@ describe('test valkeyrie', async () => {
     assert(ao instanceof AtomicOperation)
   })
 
-  await test('racy open', async () => {
+  await test('racy open', sqliteOnly, async () => {
     for (let i = 0; i < 100; i++) {
       const filename = join(tmpdir(), randomUUID())
 
@@ -1945,7 +1946,7 @@ describe('test valkeyrie', async () => {
     }
   })
 
-  await test('racy write', async () => {
+  await test('racy write', sqliteOnly, async () => {
     const filename = join(tmpdir(), randomUUID())
     const concurrency = 20
     const iterations = 5
@@ -1982,11 +1983,11 @@ describe('test valkeyrie', async () => {
   })
 
   await test('kv expiration', async () => {
-    const filename = join(tmpdir(), randomUUID())
+    const database = testDriver.createPersistentDatabase()
     let db: Valkeyrie | null = null
 
     try {
-      db = await Valkeyrie.open(filename)
+      db = await Valkeyrie.open(database.open)
 
       await db.set(['a'], 1, { expireIn: 1000 })
       await db.set(['b'], 2, { expireIn: 1000 })
@@ -2002,7 +2003,7 @@ describe('test valkeyrie', async () => {
       // Re-open to trigger immediate cleanup
       db.close()
       db = null
-      db = await Valkeyrie.open(filename)
+      db = await Valkeyrie.open(database.open)
 
       let ok = false
       for (let i = 0; i < 50; i++) {
@@ -2028,20 +2029,16 @@ describe('test valkeyrie', async () => {
           // pass
         }
       }
-      try {
-        await unlink(filename)
-      } catch {
-        // pass
-      }
+      await database.remove()
     }
   })
 
   await test('kv expiration with atomic', async () => {
-    const filename = join(tmpdir(), randomUUID())
+    const database = testDriver.createPersistentDatabase()
     let db: Valkeyrie | null = null
 
     try {
-      db = await Valkeyrie.open(filename)
+      db = await Valkeyrie.open(database.open)
 
       await db
         .atomic()
@@ -2060,7 +2057,7 @@ describe('test valkeyrie', async () => {
       // Re-open to trigger immediate cleanup
       db.close()
       db = null
-      db = await Valkeyrie.open(filename)
+      db = await Valkeyrie.open(database.open)
 
       let ok = false
       for (let i = 0; i < 50; i++) {
@@ -2086,11 +2083,7 @@ describe('test valkeyrie', async () => {
           // pass
         }
       }
-      try {
-        await unlink(filename)
-      } catch {
-        // pass
-      }
+      await database.remove()
     }
   })
 
@@ -2138,7 +2131,7 @@ describe('test valkeyrie', async () => {
   })
 
   await test('watch should stop when db closed', async () => {
-    const db = await Valkeyrie.open(':memory:')
+    const db = await Valkeyrie.open(testDriver.open)
 
     const watch = db.watch([['a']])
     const completion = (async () => {
@@ -2194,40 +2187,47 @@ describe('test valkeyrie', async () => {
     )
   })
 
-  await test('destroy clears the db for in-memory db', async () => {
+  await test('destroy clears the db for in-memory db', sqliteOnly, async () => {
     const db = await Valkeyrie.open(':memory:')
     await db.destroy()
     assert.strictEqual((await db.get(['a'])).value, null)
   })
 
-  await test('destroy deletes the file for persistent db', async () => {
-    const filename = join(tmpdir(), randomUUID())
-    const db = await Valkeyrie.open(filename)
-    assert.strictEqual(await access(filename), undefined)
-    await db.destroy()
-    await assert.rejects(() => access(filename), {
-      name: 'Error',
-      message: `ENOENT: no such file or directory, access '${filename}'`,
-    })
-  })
+  await test(
+    'destroy deletes the file for persistent db',
+    sqliteOnly,
+    async () => {
+      const filename = join(tmpdir(), randomUUID())
+      const db = await Valkeyrie.open(filename)
+      assert.strictEqual(await access(filename), undefined)
+      await db.destroy()
+      await assert.rejects(() => access(filename), {
+        name: 'Error',
+        message: `ENOENT: no such file or directory, access '${filename}'`,
+      })
+    },
+  )
 
-  await test('clear removes all data', async () => {
-    const db = await Valkeyrie.open(':memory:')
+  await dbTest('clear removes all data', async (db) => {
     await db.set(['a'], 1)
     assert.strictEqual((await db.get(['a'])).value, 1)
     await db.clear()
     assert.strictEqual((await db.get(['a'])).value, null)
   })
 
-  await test('clear removes all data and keeps the file for persistent db', async () => {
-    const filename = join(tmpdir(), randomUUID())
-    const db = await Valkeyrie.open(filename)
-    await db.set(['a'], 1)
-    assert.strictEqual((await db.get(['a'])).value, 1)
-    await db.clear()
-    assert.strictEqual((await db.get(['a'])).value, null)
-    assert.strictEqual(await access(filename), undefined)
-  })
+  await test(
+    'clear removes all data and keeps the file for persistent db',
+    sqliteOnly,
+    async () => {
+      const filename = join(tmpdir(), randomUUID())
+      const db = await Valkeyrie.open(filename)
+      await db.set(['a'], 1)
+      assert.strictEqual((await db.get(['a'])).value, 1)
+      await db.clear()
+      assert.strictEqual((await db.get(['a'])).value, null)
+      assert.strictEqual(await access(filename), undefined)
+    },
+  )
 
   await dbTest('list with invalid selector combinations', async (db) => {
     await assert.rejects(
