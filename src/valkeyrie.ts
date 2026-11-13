@@ -1,6 +1,8 @@
 import { serialize } from 'node:v8'
 import type { StandardSchemaV1 } from '@standard-schema/spec'
 import type { Driver } from './driver.ts'
+import { KEY_HASH_END, decodeKey, encodeKey } from './key-codec.ts'
+import { checkKeyFormat, writeKeyFormat } from './key-format.ts'
 import { KvU64 } from './kv-u64.ts'
 import type { SchemaRegistry } from './schema-registry.ts'
 import { validateReservedKeyParts, validateValue } from './schema-validator.ts'
@@ -20,6 +22,8 @@ import type {
   SchemaRegistry as SchemaRegistryType,
 } from './types/schema-registry-types.ts'
 import { ValkeyrieBuilder } from './valkeyrie-builder.ts'
+
+export { KeyFormatError } from './key-format-error.ts'
 
 export type KeyPart = Uint8Array | string | number | bigint | boolean | symbol
 export type Key = readonly KeyPart[]
@@ -237,6 +241,9 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
       kValkeyrie,
     )
     try {
+      // Check the key format first: with another format, a key can address
+      // another entry
+      await checkKeyFormat(db.#driver)
       await db.cleanup()
     } catch (error) {
       await db.#closeDriver()
@@ -578,6 +585,9 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
    */
   public async clear(): Promise<void> {
     await this.#driver.clear()
+    // The driver also deletes the key format row; write it again so that the
+    // next open() finds it
+    await writeKeyFormat(this.#driver)
   }
 
   /**
@@ -607,88 +617,13 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
   }
 
   /**
-   * Generates a hash for a given key. This method is crucial for indexing and storing keys in the database.
-   * It converts each part of the key into a specific byte format based on its type, following Deno.KV's encoding format.
-   * The format for each type is as follows:
-   * - Uint8Array: 0x01 + bytes + 0x00
-   * - String: 0x02 + utf8 bytes + 0x00
-   * - BigInt: 0x03 + 8 bytes int64 + 0x00
-   * - Number: 0x04 + 8 bytes double + 0x00
-   * - Boolean: 0x05 + single byte + 0x00
-   *
-   * After converting each part, they are concatenated with a null byte delimiter to form the full key.
-   * This method ensures that keys are consistently formatted and can be reliably hashed for storage and retrieval.
-   * Note that key ordering is determined by a lexicographical comparison of their parts, with the first part being the most significant and the last part being the least significant. Additionally, key comparisons are case sensitive.
-   *
-   * @param {Key} key - The key to be hashed.
-   * @returns {Buffer} - The buffer representation of the hashed key.
-   */
-  private keyToBuffer(
-    key: Key,
-    operation: 'write' | 'read' = 'read',
-  ): Uint8Array {
-    const parts = key.map((part) => {
-      let bytes: Buffer
-
-      if (part instanceof Uint8Array) {
-        // Uint8Array format: 0x01 + bytes + 0x00
-        bytes = Buffer.alloc(part.length + 2)
-        bytes[0] = 0x01 // Uint8Array type marker
-        Buffer.from(part).copy(bytes, 1)
-        bytes[bytes.length - 1] = 0x00
-      } else if (typeof part === 'string') {
-        // String format: 0x02 + utf8 bytes + 0x00
-        const strBytes = Buffer.from(part, 'utf8')
-        bytes = Buffer.alloc(strBytes.length + 2)
-        bytes[0] = 0x02 // String type marker
-        strBytes.copy(bytes, 1)
-        bytes[bytes.length - 1] = 0x00
-      } else if (typeof part === 'bigint') {
-        // Bigint format: 0x03 + 8 bytes int64 + 0x00
-        bytes = Buffer.alloc(10)
-        bytes[0] = 0x03 // Bigint type marker
-        const hex = part.toString(16).padStart(16, '0')
-        Buffer.from(hex, 'hex').copy(bytes, 1)
-        bytes[bytes.length - 1] = 0x00
-      } else if (typeof part === 'number') {
-        // Number format: 0x04 + 8 bytes double + 0x00
-        bytes = Buffer.alloc(10)
-        bytes[0] = 0x04 // Number type marker
-        bytes.writeDoubleBE(part, 1)
-        bytes[bytes.length - 1] = 0x00
-      } else if (typeof part === 'boolean') {
-        // Boolean format: 0x05 + single byte + 0x00
-        bytes = Buffer.alloc(3)
-        bytes[0] = 0x05 // Boolean type marker
-        bytes[1] = part ? 1 : 0
-        bytes[bytes.length - 1] = 0x00
-      } else {
-        throw new Error(`Unsupported key part type: ${typeof part}`)
-      }
-
-      return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-    })
-
-    // Join all parts with a null byte delimiter
-    const fullKey = Buffer.concat([...parts])
-    if (fullKey.length > 2048) {
-      throw new TypeError(
-        `Key too large for ${operation} (max ${
-          operation === 'write' ? 2048 : 2049
-        } bytes)`,
-      )
-    }
-    return fullKey
-  }
-
-  /**
    * Hashes a key.
    *
    * @param {Key} key - The key to hash.
    * @returns {string} - The hex string representation of the hashed key.
    */
   private hashKey(key: Key, operation?: 'write' | 'read'): string {
-    return Buffer.from(this.keyToBuffer(key, operation)).toString('hex')
+    return encodeKey(key, operation).toString('hex')
   }
 
   /**
@@ -698,123 +633,7 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
    * @returns {string} - The base64 string representation of the hashed key.
    */
   private getCursorFromKey(key: Key): string {
-    return Buffer.from(this.keyToBuffer(key))
-      .toString('base64')
-      .replace(/=+$/, '')
-  }
-
-  /**
-   * Decodes a base64-encoded key hash back into its original key parts.
-   * This method reverses the encoding process performed by hashKey.
-   * It handles the following formats:
-   * - Uint8Array: 0x01 + bytes + 0x00
-   * - String: 0x02 + utf8 bytes + 0x00
-   * - BigInt: 0x03 + 8 bytes int64 + 0x00
-   * - Number: 0x04 + 8 bytes double + 0x00
-   * - Boolean: 0x05 + single byte + 0x00
-   *
-   * @param {string} hash - The base64-encoded key hash to decode
-   * @returns {Key} The decoded key parts array
-   * @throws {Error} If the hash format is invalid or contains an unknown type marker
-   */
-  private decodeKeyHash(hash: string): Key {
-    const buffer = Buffer.from(hash, 'hex')
-    const parts: KeyPart[] = []
-    let pos = 0
-
-    while (pos < buffer.length) {
-      const typeMarker = buffer[pos] as number
-      pos++
-
-      switch (typeMarker) {
-        case 0x01: {
-          // Uint8Array
-          let end = pos
-          // Find the terminator (0x00) that marks the end of the Uint8Array
-          // We need to scan for it rather than stopping at the first 0 value
-          // since the Uint8Array itself might contain zeros
-          while (end < buffer.length) {
-            // Check if this position is the terminator
-            if (buffer[end] === 0x00) {
-              const nextPos = end + 1
-              // Check if we're at the end of the buffer
-              if (nextPos >= buffer.length) {
-                break
-              }
-
-              // Check if the next byte is a valid type marker
-              const nextByte = buffer[nextPos]
-              if (
-                nextByte === 0x01 ||
-                nextByte === 0x02 ||
-                nextByte === 0x03 ||
-                nextByte === 0x04 ||
-                nextByte === 0x05
-              ) {
-                break
-              }
-            }
-            end++
-          }
-
-          if (end >= buffer.length)
-            throw new Error('Invalid key hash: unterminated Uint8Array')
-          const bytes = buffer.subarray(pos, end)
-          parts.push(new Uint8Array(bytes))
-          pos = end + 1
-          break
-        }
-        case 0x02: {
-          // String
-          let end = pos
-          while (end < buffer.length && buffer[end] !== 0x00) end++
-          if (end >= buffer.length)
-            throw new Error('Invalid key hash: unterminated String')
-          const str = buffer.subarray(pos, end).toString('utf8')
-          parts.push(str)
-          pos = end + 1
-          break
-        }
-        case 0x03: {
-          // BigInt
-          if (pos + 8 >= buffer.length)
-            throw new Error('Invalid key hash: BigInt too short')
-          if (buffer[pos + 8] !== 0x00)
-            throw new Error('Invalid key hash: BigInt not terminated')
-          const hex = buffer.subarray(pos, pos + 8).toString('hex')
-          parts.push(BigInt(`0x${hex}`))
-          pos += 9
-          break
-        }
-        case 0x04: {
-          // Number
-          if (pos + 8 >= buffer.length)
-            throw new Error('Invalid key hash: Number too short')
-          if (buffer[pos + 8] !== 0x00)
-            throw new Error('Invalid key hash: Number not terminated')
-          const num = buffer.readDoubleBE(pos)
-          parts.push(num)
-          pos += 9
-          break
-        }
-        case 0x05: {
-          // Boolean
-          if (pos >= buffer.length)
-            throw new Error('Invalid key hash: Boolean too short')
-          if (buffer[pos + 1] !== 0x00)
-            throw new Error('Invalid key hash: Boolean not terminated')
-          parts.push(buffer[pos] === 1)
-          pos += 2
-          break
-        }
-        default:
-          throw new Error(
-            `Invalid key hash: unknown type marker 0x${typeMarker.toString(16)}`,
-          )
-      }
-    }
-
-    return parts
+    return encodeKey(key).toString('base64').replace(/=+$/, '')
   }
 
   /**
@@ -841,7 +660,7 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
     }
 
     return {
-      key: this.decodeKeyHash(result.keyHash),
+      key: decodeKey(result.keyHash),
       value: result.value as InferTypeForKey<TRegistry, TKey>,
       versionstamp: result.versionstamp,
     }
@@ -972,7 +791,7 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
 
       for (const result of results) {
         yield {
-          key: this.decodeKeyHash(result.keyHash),
+          key: decodeKey(result.keyHash),
           value: result.value as T,
           versionstamp: result.versionstamp,
         }
@@ -999,7 +818,7 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
 
   private decodeCursorKey(cursor: string): Key {
     const hash = Buffer.from(cursor, 'base64').toString('hex')
-    const decoded = this.decodeKeyHash(hash)
+    const decoded = decodeKey(hash)
     if (decoded.length === 0) {
       throw new Error('Invalid cursor: empty key')
     }
@@ -1019,12 +838,15 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
 
       return reverse
         ? { startHash: prefixHash, endHash: cursorHash }
-        : { startHash: `${cursorHash}\0`, endHash: `${prefixHash}\xff` }
+        : { startHash: `${cursorHash}\0`, endHash: `${prefixHash}ff` }
     }
 
+    // A child key continues the prefix with a type marker (01 to 05). An
+    // escaped NUL (00 ff) continues the last part of the prefix itself, so
+    // the range ends before `ff`.
     return {
       startHash: prefixHash,
-      endHash: `${prefixHash}\xff`,
+      endHash: `${prefixHash}ff`,
     }
   }
 
@@ -1063,12 +885,13 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
 
       return reverse
         ? { startHash: '', endHash: cursorHash }
-        : { startHash: `${cursorHash}\0`, endHash: '\uffff' }
+        : { startHash: `${cursorHash}\0`, endHash: KEY_HASH_END }
     }
 
+    // KEY_HASH_END is above every key and below the key format row
     return {
       startHash: '',
-      endHash: '\uffff',
+      endHash: KEY_HASH_END,
     }
   }
 
@@ -1407,7 +1230,7 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
         transform: (chunk, controller) => {
           controller.enqueue(
             chunk.map((entry) => ({
-              key: this.decodeKeyHash(entry.keyHash),
+              key: decodeKey(entry.keyHash),
               value: entry.value as T[number],
               versionstamp: entry.versionstamp as string,
             })),

@@ -7,6 +7,7 @@ Complete reference for all Valkeyrie methods and classes.
 - [Valkeyrie Class](#valkeyrie-class)
 - [AtomicOperation Class](#atomicoperation-class)
 - [KvU64 Class](#kvu64-class)
+- [Migration](#migration)
 - [Errors](#errors)
 
 ## Valkeyrie Class
@@ -81,6 +82,8 @@ static async open(
   - `destroyOnClose` - Delete the underlying storage on close (default: `false`)
 
 **Returns:** `Promise<Valkeyrie>`
+
+**Throws:** [`KeyFormatError`](#keyformaterror) if the store has entries in another key format, for example a store that Valkeyrie 0.8 wrote. `open()` then changes nothing. An empty store gets the current key format. See [Upgrading to 0.9](../guides/upgrading.md).
 
 **Example:**
 ```typescript
@@ -724,7 +727,90 @@ toJSON(): string
 
 ---
 
+## Migration
+
+Import these functions from `'valkeyrie/migrate'`. They move a store from key format 1 (Valkeyrie 0.8 and earlier) to the current key format. See [Upgrading to 0.9](../guides/upgrading.md).
+
+### `migrateSqliteKeyFormat()`
+
+Copy a SQLite store in key format 1 to a new SQLite store in the current key format.
+
+```typescript
+async function migrateSqliteKeyFormat(
+  sourcePath: string,
+  targetPath: string,
+  options?: {
+    serializer?: () => Serializer;
+    skipUnmigratable?: boolean;
+  }
+): Promise<{
+  migrated: number;
+  rekeyed: number;
+  skipped: Array<{ keyHash: string; reason: string }>;
+}>
+```
+
+**Parameters:**
+- `sourcePath` - The store in key format 1. The migration does not change it.
+- `targetPath` - The new store. No file can exist there.
+- `options`
+  - `serializer` - The serializer of the store (default: V8 serializer). The migration copies the values as stored bytes, and writes the key format row with this serializer.
+  - `skipUnmigratable` - Copy the other rows when some rows cannot be migrated (default: `false`, which stops before the target exists)
+
+**Returns:** The number of copied rows, the number of copied rows with a new key hash, and the rows that were not copied.
+
+**Example:**
+```typescript
+import { migrateSqliteKeyFormat } from 'valkeyrie/migrate';
+
+const result = await migrateSqliteKeyFormat('./data.db', './data-0.9.db');
+console.log(result); // { migrated: 1200, rekeyed: 3, skipped: [] }
+```
+
+### `migrateKeyHash()`
+
+Turn the key hash of a row in key format 1 into the key hash of the same key in the current key format. Use it to migrate the rows of a custom driver into a new, empty store.
+
+```typescript
+function migrateKeyHash(legacyKeyHash: string): string
+```
+
+**Example:**
+```typescript
+import { migrateKeyHash } from 'valkeyrie/migrate';
+
+migrateKeyHash('0100ff00'); // '0100ffff00', the key [new Uint8Array([0, 255])]
+```
+
+---
+
 ## Errors
+
+### KeyFormatError
+
+Thrown by `open()`, `from()` and `fromAsync()` when the store has entries in another key format. Valkeyrie then changes nothing in the store.
+
+```typescript
+class KeyFormatError extends Error {
+  found: number | null; // 1 for a store that Valkeyrie 0.8 or earlier wrote
+  expected: number;
+}
+```
+
+**Example:**
+```typescript
+import { KeyFormatError, Valkeyrie } from 'valkeyrie';
+
+try {
+  const db = await Valkeyrie.open('./data.db');
+} catch (error) {
+  if (error instanceof KeyFormatError && error.found === 1) {
+    console.log('Migrate the store first: see the upgrade guide');
+  }
+}
+```
+
+---
 
 ### ValidationError
 
