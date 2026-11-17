@@ -12,6 +12,7 @@ import { decodeKey } from '../src/key-codec.ts'
 import { KvU64 } from '../src/kv-u64.ts'
 import { jsonSerializer } from '../src/serializers/json.ts'
 import type { Serializer } from '../src/serializers/serializer.ts'
+import { v8Serializer } from '../src/serializers/v8.ts'
 import { sqliteDriver } from '../src/sqlite-driver.ts'
 import { ValkeyrieBuilder } from '../src/valkeyrie-builder.ts'
 import {
@@ -2210,6 +2211,91 @@ describe('test valkeyrie', async () => {
 
     await completion
   })
+
+  /**
+   * Opens an in-memory database whose serializer cannot read `'unreadable'`,
+   * or any value while `failing()` returns true.
+   */
+  function openWithFailingDeserialize(failing: () => boolean = () => false) {
+    const serializer = v8Serializer()
+    return Valkeyrie.open(':memory:', {
+      serializer: () => ({
+        ...serializer,
+        deserialize: (value) => {
+          const result = serializer.deserialize(value)
+          if (failing() || result === 'unreadable') {
+            throw new Error('deserializer unavailable')
+          }
+          return result
+        },
+      }),
+    })
+  }
+
+  await test(
+    'atomic commit reports success when a watcher cannot read the committed value',
+    sqliteOnly,
+    async () => {
+      let failing = false
+      const db = await openWithFailingDeserialize(() => failing)
+      const reader = db.watch([['a']]).getReader()
+      try {
+        assert.deepStrictEqual((await reader.read()).value, [
+          { key: ['a'], value: null, versionstamp: null },
+        ])
+        failing = true
+        const result = await db.atomic().set(['a'], 'value').commit()
+        assert.ok(result.ok)
+        await assert.rejects(
+          reader.read(),
+          new Error('deserializer unavailable'),
+        )
+        failing = false
+        assert.deepStrictEqual(await db.get(['a']), {
+          key: ['a'],
+          value: 'value',
+          versionstamp: result.versionstamp,
+        })
+      } finally {
+        reader.releaseLock()
+        await db.close()
+      }
+    },
+  )
+
+  await test(
+    'set notifies the other watchers when one watcher cannot read its value',
+    sqliteOnly,
+    async () => {
+      const db = await openWithFailingDeserialize()
+      const failingReader = db.watch([['bad']]).getReader()
+      const reader = db.watch([['good']]).getReader()
+      try {
+        assert.deepStrictEqual((await failingReader.read()).value, [
+          { key: ['bad'], value: null, versionstamp: null },
+        ])
+        assert.deepStrictEqual((await reader.read()).value, [
+          { key: ['good'], value: null, versionstamp: null },
+        ])
+        assert.ok((await db.set(['bad'], 'unreadable')).ok)
+        await assert.rejects(
+          failingReader.read(),
+          new Error('deserializer unavailable'),
+        )
+        assert.deepStrictEqual((await reader.read()).value, [
+          { key: ['good'], value: null, versionstamp: null },
+        ])
+        const { versionstamp } = await db.set(['good'], 'readable')
+        assert.deepStrictEqual((await reader.read()).value, [
+          { key: ['good'], value: 'readable', versionstamp },
+        ])
+      } finally {
+        failingReader.releaseLock()
+        reader.releaseLock()
+        await db.close()
+      }
+    },
+  )
 
   await dbTest('list with more than 1000 elements', async (db) => {
     // Create 1200 elements with prefix ['large'] in smaller batches

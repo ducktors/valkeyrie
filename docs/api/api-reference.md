@@ -391,6 +391,8 @@ watch<T>(keys: Key[]): ReadableStream<EntryMaybe<T>[]>
 
 The SQLite driver groups a transaction's mutation notifications into one update after commit. A rollback does not publish those mutations.
 
+If the SQLite driver cannot read a watched value, for example because the serializer fails, that stream errors and stops. The write still succeeds, and the other watchers still get their updates.
+
 **Example:**
 ```typescript
 const stream = db.watch([
