@@ -389,6 +389,8 @@ watch<T>(keys: Key[]): ReadableStream<EntryMaybe<T>[]>
 
 **Returns:** `ReadableStream` that emits entry arrays
 
+The SQLite driver groups a transaction's mutation notifications into one update after commit. A rollback does not publish those mutations.
+
 **Example:**
 ```typescript
 const stream = db.watch([

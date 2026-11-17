@@ -155,8 +155,15 @@ export const sqliteDriver = defineDriver(
       >
     }> = []
 
-    // Function to notify watchers of changes
+    /**
+     * Publishes committed values. A transaction publishes once after commit,
+     * so its intermediate writes and rolled-back changes stay out of the stream.
+     *
+     * @returns Resolves after the current values are queued for watchers.
+     */
     async function notifyWatchers() {
+      if (transactionState.inTransaction) return
+
       const now = Date.now()
       for (const watcher of watchQueue) {
         const results = await Promise.all(

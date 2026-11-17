@@ -141,6 +141,59 @@ describe('sqliteDriver', async () => {
     reader.releaseLock()
   })
 
+  await test('publishes only committed values from nested transactions', async () => {
+    const keyHash = hash('transaction-watch')
+    const reader = driver.watch([keyHash]).getReader()
+    try {
+      assert.strictEqual((await reader.read()).value?.[0]?.value, null)
+      await driver.withTransaction(async () => {
+        await driver.set(keyHash, 'intermediate', 'v1')
+        await driver.withTransaction(async () => {
+          await driver.delete(keyHash)
+          await driver.set(keyHash, 'committed', 'v2')
+        })
+      })
+      assert.deepStrictEqual((await reader.read()).value, [
+        { keyHash, value: 'committed', versionstamp: 'v2' },
+      ])
+      await driver.set(keyHash, 'outside transaction', 'v3')
+      assert.deepStrictEqual((await reader.read()).value, [
+        { keyHash, value: 'outside transaction', versionstamp: 'v3' },
+      ])
+    } finally {
+      await reader.cancel()
+      reader.releaseLock()
+    }
+  })
+
+  await test('publishes later writes without values from a rolled-back transaction', async () => {
+    const keyHash = hash('rollback-watch')
+    await driver.set(keyHash, 'original', 'v1')
+    const reader = driver.watch([keyHash]).getReader()
+    try {
+      assert.strictEqual((await reader.read()).value?.[0]?.value, 'original')
+      await assert.rejects(
+        driver.withTransaction(async () => {
+          await driver.set(keyHash, 'rolled back', 'v2')
+          throw new Error('transaction failed')
+        }),
+        new Error('transaction failed'),
+      )
+      assert.deepStrictEqual(await driver.get(keyHash, Date.now()), {
+        keyHash,
+        value: 'original',
+        versionstamp: 'v1',
+      })
+      await driver.set(keyHash, 'after rollback', 'v3')
+      assert.deepStrictEqual((await reader.read()).value, [
+        { keyHash, value: 'after rollback', versionstamp: 'v3' },
+      ])
+    } finally {
+      await reader.cancel()
+      reader.releaseLock()
+    }
+  })
+
   await test('properly handles stream cancel mechanism', async () => {
     const keyHash = hash('cancel-mechanic-test')
 

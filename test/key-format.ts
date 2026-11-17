@@ -14,6 +14,7 @@ import { KEY_FORMAT, KEY_FORMAT_KEY_HASH } from '../src/key-format.ts'
 import { KvU64 } from '../src/kv-u64.ts'
 import { migrateKeyHash, migrateSqliteKeyFormat } from '../src/migrate.ts'
 import { jsonSerializer } from '../src/serializers/json.ts'
+import { v8Serializer } from '../src/serializers/v8.ts'
 import { sqliteDriver } from '../src/sqlite-driver.ts'
 import { KeyFormatError, Valkeyrie } from '../src/valkeyrie.ts'
 
@@ -194,6 +195,59 @@ describe('key format', async () => {
         await reopened.close()
       }
     })
+  })
+
+  await test('clear() does not publish a deletion when metadata serialization fails', async () => {
+    const serializer = v8Serializer()
+    let failSerialization = false
+    const db = await Valkeyrie.open(':memory:', {
+      serializer: () => ({
+        ...serializer,
+        serialize: (value) => {
+          if (failSerialization) throw new Error('serializer unavailable')
+          return serializer.serialize(value)
+        },
+      }),
+    })
+    const stream = db.watch([['a']])
+    const reader = stream.getReader()
+    try {
+      assert.deepStrictEqual((await reader.read()).value, [
+        { key: ['a'], value: null, versionstamp: null },
+      ])
+      const original = await db.set(['a'], 'kept')
+      assert.deepStrictEqual((await reader.read()).value, [
+        { key: ['a'], value: 'kept', versionstamp: original.versionstamp },
+      ])
+      failSerialization = true
+      await assert.rejects(db.clear(), new Error('serializer unavailable'))
+      assert.deepStrictEqual(await db.get(['a']), {
+        key: ['a'],
+        value: 'kept',
+        versionstamp: original.versionstamp,
+      })
+    } finally {
+      reader.releaseLock()
+      await db.close()
+    }
+    assert.deepStrictEqual(await Array.fromAsync(stream), [])
+  })
+
+  await test('clear() publishes the deletion after a successful commit', async () => {
+    const db = await Valkeyrie.open()
+    await db.set(['a'], 'value')
+    const stream = db.watch([['a']])
+    const reader = stream.getReader()
+    try {
+      assert.strictEqual((await reader.read()).value?.[0]?.value, 'value')
+      await db.clear()
+    } finally {
+      reader.releaseLock()
+      await db.close()
+    }
+    assert.deepStrictEqual(await Array.fromAsync(stream), [
+      [{ key: ['a'], value: null, versionstamp: null }],
+    ])
   })
 
   await test('list() over all keys does not return the key format row', async () => {
