@@ -33,7 +33,7 @@ until redis-cli -p 17300 cluster info | grep -q 'cluster_state:ok' && \
   redis-cli -p 17301 info replication | grep -q 'master_link_status:up' && \
   redis-cli -p 17300 --raw cluster slots | grep -q '^17301$'; do
   attempts=$((attempts + 1))
-  test "$attempts" -lt 100
+  test "$attempts" -lt 300
   sleep 0.1
 done
 touch /tmp/cluster-ready
