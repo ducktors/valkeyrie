@@ -37,7 +37,7 @@ Feature-specific guides for different use cases:
   - Creating custom serializers
   - Migration between serializers
 
-- **[Valkey and Redis Driver](./guides/valkey-driver.md)**
+- **[Redis and Valkey Driver](./guides/redis-driver.md)**
   - Sharing a database between processes
   - Client ownership and namespaces
   - Expiry, cleanup and memory policy
@@ -191,7 +191,7 @@ docs/
 │   ├── schema-validation.md    # Type safety guide
 │   ├── factory-methods.md      # Data import guide
 │   ├── serializers.md          # Serialization guide
-│   ├── valkey-driver.md        # Valkey and Redis driver
+│   ├── redis-driver.md        # Redis and Valkey driver
 │   └── advanced-patterns.md    # Advanced features
 └── api/                         # API reference
     ├── api-reference.md        # Method reference

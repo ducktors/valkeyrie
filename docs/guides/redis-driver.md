@@ -1,6 +1,6 @@
-# Valkey and Redis Driver
+# Redis and Valkey Driver
 
-The Valkey driver stores a Valkeyrie database in Valkey or Redis instead of a SQLite file. Several processes, such as the instances of one service, can then share one database.
+The Redis driver stores a Valkeyrie database in Valkey or Redis instead of a SQLite file. Several processes, such as the instances of one service, can then share one database.
 
 ## Table of Contents
 
@@ -26,11 +26,11 @@ pnpm add valkeyrie ioredis
 ```typescript
 import { Redis } from 'ioredis';
 import { Valkeyrie } from 'valkeyrie';
-import { valkeyDriver } from 'valkeyrie/drivers/valkey';
+import { redisDriver } from 'valkeyrie/drivers/redis';
 
 const client = new Redis('redis://localhost:6379');
 const db = await Valkeyrie.open(
-  valkeyDriver({ client, namespace: 'my-app' })
+  redisDriver({ client, namespace: 'my-app' })
 );
 
 await db.set(['users', 'alice'], { name: 'Alice' });
@@ -46,7 +46,7 @@ Every Valkeyrie feature works as with SQLite: `get`, `set`, `delete`, `list`, at
 You create the client, and you close it:
 
 - `db.close()` does not close your client.
-- The driver opens one more connection, a duplicate of your client, for atomic commits. It opens it on the first commit and closes it in `db.close()`.
+- The driver opens one more connection, a duplicate of your client, for atomic commits. It opens it on the first commit or cleanup page and closes it in `db.close()`.
 - The client can be an ioredis `Redis` or `Cluster`. [iovalkey](https://github.com/valkey-io/iovalkey) has the same API.
 
 For a server, options that fail fast are a good start:
@@ -77,7 +77,7 @@ All keys of a namespace start with `{namespace}:`. The braces make a Redis [hash
 
 A value set with `expireIn` also gets a Redis TTL, so Redis deletes it on time by itself. The TTL is the time left on your process's clock when the value is written, so a server clock that runs ahead does not expire values early. Valkeyrie still decides whether a value has expired by your process's clock. Setting the key again without `expireIn` removes the TTL.
 
-`db.cleanup()` removes expired keys from the two indexes. Valkeyrie runs it when it opens a database. A long-running process should also call it regularly, for example every minute. Several processes can run it at the same time.
+`db.cleanup()` removes expired keys from the two indexes. Valkeyrie runs it when it opens a database. A long-running process should also call it regularly, for example every minute. Several processes can run it at the same time. Await `db.cleanup()` to wait for completion and receive connection errors.
 
 If the database holds data you can rebuild, such as caches, set the server's `maxmemory-policy` to `volatile-lru`. When memory runs out, the server then evicts values that have a TTL, and never the indexes or the counter, which have none. Valkeyrie reads an evicted value as missing, `list` skips it, and cleanup removes it from the indexes at its expiry time. Avoid the `allkeys-*` policies: they can evict the indexes and the counter.
 
@@ -89,7 +89,11 @@ If the database holds data you can rebuild, such as caches, set the server's `ma
 - When another process changes a key that the commit read, the commit runs again on the new data. A check that no longer holds then returns `{ ok: false }`, and other commits succeed. A sum on a busy counter therefore succeeds, as on SQLite.
 - After 10 such conflicts in a row, the commit returns `{ ok: false }`.
 
-One driver instance runs one commit at a time. Open one database per process and share it.
+The private connection always reads from the primary, including when the caller's Cluster client uses replica reads. Ordinary reads keep the caller's routing policy.
+
+The private connection does not reconnect, redirect, or replay commands during an operation. A lost connection or cluster redirection fails the operation. The next commit or cleanup opens a fresh connection. The caller's connection options remain unchanged.
+
+Check-only commits also validate their watched reads. One driver instance runs one commit at a time. Open one database per process and share it.
 
 ## Watching Keys
 
@@ -98,5 +102,5 @@ One driver instance runs one commit at a time. Open one database per process and
 ## Compatibility
 
 - Redis 6.2 or later, and Valkey 7.2 or later. The test suite runs on standalone Redis 6.2, Redis 7.2, Valkey 8 and Valkey 9 servers.
-- Sentinel works through an ioredis `Redis` client, and cluster mode through an ioredis `Cluster` client, since a namespace stays on one shard. The test suite does not cover them yet.
-- The driver uses only core commands, which Redis and Valkey share, and no modules: `GET`, `MGET`, `SET` (with `PX`), `UNLINK`, `INCR`, `ZADD`, `ZREM`, `ZRANGEBYLEX`, `ZREVRANGEBYLEX`, `ZRANGEBYSCORE`, `WATCH`, `MULTI`, `EXEC` and `UNWATCH`.
+- Sentinel works through an ioredis `Redis` client, and cluster mode through an ioredis `Cluster` client, since a namespace stays on one shard. The cluster test covers replica lag and primary transaction reads. Sentinel is not covered by the test suite.
+- The driver uses only core commands, which Redis and Valkey share, and no modules: `GET`, `MGET`, `SET` (with `PX`), `UNLINK`, `INCR`, `ZADD`, `ZREM`, `ZRANGEBYLEX`, `ZREVRANGEBYLEX`, `ZRANGEBYSCORE`, `WATCH`, `MULTI` and `EXEC`.

@@ -1,13 +1,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { once } from 'node:events'
 import { setTimeout } from 'node:timers/promises'
 import type { ChainableCommander, Cluster, Redis } from 'ioredis'
 import type { Driver, DriverValue } from './driver.ts'
 import { v8Serializer } from './serializers/v8.ts'
 import type { DriverFactory } from './valkeyrie.ts'
 
-/** Options for {@link valkeyDriver}. */
-export interface ValkeyDriverOptions {
+/** Options for {@link redisDriver}. */
+export interface RedisDriverOptions {
   /**
    * An ioredis-compatible client connected to Redis or Valkey. The caller
    * owns it: the driver never closes it. The driver opens one more
@@ -35,10 +34,10 @@ interface Watcher {
 }
 
 // A commit in progress: its pending writes by key hash (the entry to store,
-// or null to delete), and whether it has watched any key.
+// or null to delete), bound to one private connection.
 interface Transaction {
   writes: Map<string, Buffer | null>
-  watched: boolean
+  connection: Client
 }
 
 // An entry is one string: the versionstamp, the expiry time in milliseconds
@@ -72,7 +71,7 @@ async function exec(
   abortedMessage: string,
 ): Promise<void> {
   if (!(await tryExec(transaction))) {
-    throw new Error(`valkeyDriver: ${abortedMessage}`)
+    throw new Error(`redisDriver: ${abortedMessage}`)
   }
 }
 
@@ -111,7 +110,7 @@ function parseBound(bound: string): {
     return { bytes, position: 'past' }
   }
   throw new TypeError(
-    `valkeyDriver: unsupported list bound ${JSON.stringify(bound)}`,
+    `redisDriver: unsupported list bound ${JSON.stringify(bound)}`,
   )
 }
 
@@ -159,14 +158,35 @@ function upperBound(bound: string): Buffer | string | null {
   return next === null ? '+' : exclusive(next)
 }
 
+/** Creates a private connection that cannot replay a transaction after connection loss. */
 async function connectDuplicate(client: Client): Promise<Client> {
-  const connection = client.duplicate()
+  const connection =
+    'nodes' in client
+      ? client.duplicate([], {
+          lazyConnect: true,
+          scaleReads: 'master',
+          enableAutoPipelining: false,
+          enableOfflineQueue: false,
+          clusterRetryStrategy: null,
+          clusterNodeRetryStrategy: null,
+          maxRedirections: 0,
+          slotsRefreshInterval: 0,
+          redisOptions: {
+            ...client.options.redisOptions,
+            autoResendUnfulfilledCommands: false,
+            reconnectOnError: null,
+          },
+        })
+      : client.duplicate({
+          lazyConnect: true,
+          enableAutoPipelining: false,
+          enableOfflineQueue: false,
+          autoResendUnfulfilledCommands: false,
+          retryStrategy: null,
+          reconnectOnError: null,
+        })
   try {
-    if (connection.status === 'wait') {
-      await connection.connect()
-    } else if (connection.status !== 'ready') {
-      await once(connection, 'ready')
-    }
+    await connection.connect()
     return connection
   } catch (error) {
     connection.disconnect()
@@ -182,16 +202,16 @@ async function connectDuplicate(client: Client): Promise<Client> {
  * ```typescript
  * import { Redis } from 'ioredis'
  * import { Valkeyrie } from 'valkeyrie'
- * import { valkeyDriver } from 'valkeyrie/drivers/valkey'
+ * import { redisDriver } from 'valkeyrie/drivers/redis'
  *
  * const client = new Redis('redis://localhost:6379')
- * const db = await Valkeyrie.open(valkeyDriver({ client, namespace: 'my-app' }))
+ * const db = await Valkeyrie.open(redisDriver({ client, namespace: 'my-app' }))
  * ```
  */
-export function valkeyDriver({
+export function redisDriver({
   client,
   namespace,
-}: ValkeyDriverOptions): DriverFactory {
+}: RedisDriverOptions): DriverFactory {
   if (namespace === '' || /[{}]/.test(namespace)) {
     throw new TypeError(
       `Invalid namespace "${namespace}": it must not be empty or contain "{" or "}"`,
@@ -252,15 +272,26 @@ export function valkeyDriver({
     let transactionConnection: Promise<Client> | undefined
     // Set by `close`: from then on the driver opens no connection.
     let closed = false
-    const transactionClient = (): Promise<Client> => {
+    const discardConnection = (connection: Client): void => {
+      connection.disconnect()
+      transactionConnection = undefined
+    }
+    const transactionClient = async (): Promise<Client> => {
       if (closed) {
-        return Promise.reject(new Error('valkeyDriver: the driver is closed'))
+        throw new Error('redisDriver: the driver is closed')
       }
-      transactionConnection ??= connectDuplicate(client).catch((error) => {
+      if (transactionConnection) {
+        const connection = await transactionConnection
+        if (connection.status === 'ready') {
+          return connection
+        }
+        discardConnection(connection)
+      }
+      transactionConnection = connectDuplicate(client).catch((error) => {
         transactionConnection = undefined
         throw error
       })
-      return transactionConnection
+      return await transactionConnection
     }
 
     const decode = (
@@ -367,18 +398,18 @@ export function valkeyDriver({
             const members = candidates.filter((member) =>
               stillExpired.has(member.toString('hex')),
             )
-            if (members.length === 0) {
-              return false
-            }
-            return await tryExec(
-              connection
-                .multi()
+            const commands = connection.multi().get(sequenceKey)
+            if (members.length > 0) {
+              commands
                 .unlink(...members.map(entryKeyOf))
                 .zrem(indexKey, ...members)
-                .zrem(expiryKey, ...members),
-            )
-          } finally {
-            await connection.unwatch().catch(() => {})
+                .zrem(expiryKey, ...members)
+            }
+            const committed = await tryExec(commands)
+            return committed && members.length > 0
+          } catch (error) {
+            discardConnection(connection)
+            throw error
           }
         })
         if (committed === undefined) {
@@ -443,9 +474,8 @@ export function valkeyDriver({
           return pending === null ? undefined : decode(keyHash, pending, now)
         }
         // Otherwise WATCH the key, so EXEC fails if anyone changes it.
-        const connection = await transactionClient()
+        const connection = transaction.connection
         const key = entryKey(keyHash)
-        transaction.watched = true
         const [, entry] = await Promise.all([
           connection.watch(key),
           connection.getBuffer(key),
@@ -509,26 +539,24 @@ export function valkeyDriver({
           result: T
           written: string[]
         }> => {
-          const transaction: Transaction = { writes: new Map(), watched: false }
+          const connection = await transactionClient()
+          const transaction: Transaction = { writes: new Map(), connection }
           try {
             const result = await transactions.run(transaction, callback)
             const written = [...transaction.writes.keys()]
-            if (written.length === 0) {
-              return { committed: true, result, written }
-            }
-            let commands = (await transactionClient()).multi()
+            // GET routes even an empty commit to the watched namespace's shard.
+            let commands = connection.multi().get(sequenceKey)
             for (const [keyHash, entry] of transaction.writes) {
               commands = write(commands, keyHash, entry)
             }
             return { committed: await tryExec(commands), result, written }
-          } finally {
-            if (transaction.watched) {
-              // EXEC has already unwatched. An error here must not turn a
-              // committed transaction into a failure.
-              await (await transactionClient()).unwatch().catch(() => {})
-            }
+          } catch (error) {
+            // Closing the connection releases WATCH without routing a keyless UNWATCH.
+            discardConnection(connection)
+            throw error
           }
         }
+
         const { result, written } = await lock(async () => {
           for (let attempts = 1; ; attempts++) {
             const outcome = await attempt()
@@ -537,7 +565,7 @@ export function valkeyDriver({
             }
             if (attempts === COMMIT_ATTEMPTS) {
               throw new Error(
-                `valkeyDriver: keys read by the transaction changed ${COMMIT_ATTEMPTS} times`,
+                `redisDriver: keys read by the transaction changed ${COMMIT_ATTEMPTS} times`,
               )
             }
             // Back off 5–20 ms, like the SQLite driver on a busy database.

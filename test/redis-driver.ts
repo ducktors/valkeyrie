@@ -1,21 +1,22 @@
 import assert from 'node:assert'
+import { once } from 'node:events'
 import { after, describe, test } from 'node:test'
 import { setTimeout } from 'node:timers/promises'
 import { Redis } from 'ioredis'
 import type { Driver } from '../src/driver.ts'
 import { KvU64 } from '../src/kv-u64.ts'
+import { redisDriver } from '../src/redis-driver.ts'
 import { jsonSerializer } from '../src/serializers/json.ts'
 import type { Serializer } from '../src/serializers/serializer.ts'
 import { v8Serializer } from '../src/serializers/v8.ts'
 import { sqliteDriver } from '../src/sqlite-driver.ts'
-import { valkeyDriver } from '../src/valkey-driver.ts'
 import { type DriverFactory, type Key, Valkeyrie } from '../src/valkeyrie.ts'
-import { removeNamespace, testNamespace } from './drivers/valkey.ts'
+import { removeNamespace, testNamespace } from './drivers/redis.ts'
 
 const redisUrl = process.env.VALKEYRIE_TEST_REDIS_URL
 
 describe(
-  'valkeyDriver',
+  'redisDriver',
   { skip: redisUrl === undefined && 'set VALKEYRIE_TEST_REDIS_URL to run' },
   async () => {
     const clients: Redis[] = []
@@ -94,10 +95,10 @@ describe(
     await test('two clients share the data of one namespace', async () => {
       const name = namespace()
       const a = await Valkeyrie.open(
-        valkeyDriver({ client: connect(), namespace: name }),
+        redisDriver({ client: connect(), namespace: name }),
       )
       const b = await Valkeyrie.open(
-        valkeyDriver({ client: connect(), namespace: name }),
+        redisDriver({ client: connect(), namespace: name }),
       )
       try {
         const { versionstamp } = await a.set(['k'], 'from a')
@@ -118,10 +119,10 @@ describe(
     await test('two namespaces never see each other’s keys', async () => {
       const client = connect()
       const one = await Valkeyrie.open(
-        valkeyDriver({ client, namespace: namespace() }),
+        redisDriver({ client, namespace: namespace() }),
       )
       const two = await Valkeyrie.open(
-        valkeyDriver({ client, namespace: namespace() }),
+        redisDriver({ client, namespace: namespace() }),
       )
       try {
         await one.set(['k'], 1)
@@ -143,10 +144,10 @@ describe(
     await test('versionstamps come from one counter per namespace', async () => {
       const name = namespace()
       const a = await Valkeyrie.open(
-        valkeyDriver({ client: connect(), namespace: name }),
+        redisDriver({ client: connect(), namespace: name }),
       )
       const b = await Valkeyrie.open(
-        valkeyDriver({ client: connect(), namespace: name }),
+        redisDriver({ client: connect(), namespace: name }),
       )
       try {
         const first = (await a.set(['k'], 1)).versionstamp
@@ -166,7 +167,7 @@ describe(
     await test('closing the database leaves the caller’s client open', async () => {
       const client = connect()
       const db = await Valkeyrie.open(
-        valkeyDriver({ client, namespace: namespace() }),
+        redisDriver({ client, namespace: namespace() }),
       )
       await db.close()
       assert.strictEqual(await client.ping(), 'PONG')
@@ -177,7 +178,7 @@ describe(
       const keyHashes: string[] = []
       const db = await Valkeyrie.open(
         recordKeyHashes(
-          valkeyDriver({ client: connect(), namespace: name }),
+          redisDriver({ client: connect(), namespace: name }),
           keyHashes,
         ),
       )
@@ -217,7 +218,7 @@ describe(
       const keyHashes: string[] = []
       const db = await Valkeyrie.open(
         recordKeyHashes(
-          valkeyDriver({ client: connect(), namespace: name }),
+          redisDriver({ client: connect(), namespace: name }),
           keyHashes,
         ),
       )
@@ -270,7 +271,7 @@ describe(
         }
       }
       const db = await Valkeyrie.open(
-        valkeyDriver({ client: connect(), namespace: namespace() }),
+        redisDriver({ client: connect(), namespace: namespace() }),
         { serializer: spy },
       )
       try {
@@ -287,7 +288,7 @@ describe(
       const keyHashes: string[] = []
       const db = await Valkeyrie.open(
         recordKeyHashes(
-          valkeyDriver({ client: connect(), namespace: name }),
+          redisDriver({ client: connect(), namespace: name }),
           keyHashes,
         ),
       )
@@ -311,11 +312,11 @@ describe(
     await test('a commit writes nothing when another client changed a checked key', async () => {
       const name = namespace()
       const other = await Valkeyrie.open(
-        valkeyDriver({ client: connect(), namespace: name }),
+        redisDriver({ client: connect(), namespace: name }),
       )
       const db = await Valkeyrie.open(
         interfereAfterRead(
-          valkeyDriver({ client: connect(), namespace: name }),
+          redisDriver({ client: connect(), namespace: name }),
           () => other.set(['k'], 'other'),
         ),
       )
@@ -337,14 +338,135 @@ describe(
       }
     })
 
-    await test('a create-if-absent check fails when another client created the key first', async () => {
+    await test('check-only commits reject checks that never held together', async () => {
       const name = namespace()
       const other = await Valkeyrie.open(
-        valkeyDriver({ client: connect(), namespace: name }),
+        redisDriver({ client: connect(), namespace: name }),
       )
       const db = await Valkeyrie.open(
         interfereAfterRead(
-          valkeyDriver({ client: connect(), namespace: name }),
+          redisDriver({ client: connect(), namespace: name }),
+          () => other.atomic().delete(['a']).delete(['b']).commit(),
+        ),
+      )
+      try {
+        const { versionstamp } = await db.set(['a'], 1)
+        await db.set(['b'], 1)
+        assert.deepStrictEqual(
+          await db
+            .atomic()
+            .check(
+              { key: ['a'], versionstamp },
+              { key: ['b'], versionstamp: null },
+            )
+            .commit(),
+          { ok: false },
+        )
+      } finally {
+        await db.close()
+        await other.close()
+      }
+    })
+
+    await test('connection loss cannot commit a stale checked write', async () => {
+      const name = namespace()
+      const client = connect()
+      let connection: Redis | undefined
+      const duplicate = client.duplicate.bind(client)
+      client.duplicate = (...args: Parameters<Redis['duplicate']>) => {
+        connection = duplicate(...args)
+        return connection
+      }
+      const other = await Valkeyrie.open(
+        redisDriver({ client: connect(), namespace: name }),
+      )
+      const db = await Valkeyrie.open(
+        interfereAfterRead(
+          redisDriver({ client, namespace: name }),
+          async () => {
+            assert.ok(connection)
+            const settled = Promise.race([
+              once(connection, 'ready'),
+              once(connection, 'end'),
+            ])
+            await admin.client(
+              'KILL',
+              'ID',
+              (await connection.client('ID')) as number,
+            )
+            await settled
+            await other.set(['a'], 'other')
+          },
+        ),
+      )
+      try {
+        const { versionstamp } = await db.set(['a'], 'original')
+        assert.deepStrictEqual(
+          await db
+            .atomic()
+            .check({ key: ['a'], versionstamp })
+            .set(['a'], 'stale')
+            .commit(),
+          { ok: false },
+        )
+        assert.strictEqual((await other.get(['a'])).value, 'other')
+        assert.ok((await db.atomic().set(['next'], 'recovered').commit()).ok)
+        assert.strictEqual((await other.get(['next'])).value, 'recovered')
+      } finally {
+        await db.close()
+        await other.close()
+      }
+    })
+
+    await test('close preserves a successful watched commit result', async () => {
+      const name = namespace()
+      const client = connect()
+      let closing: Promise<void> | undefined
+      let db: Valkeyrie
+      const duplicate = client.duplicate.bind(client)
+      client.duplicate = (...args: Parameters<Redis['duplicate']>) => {
+        const connection = duplicate(...args)
+        const multi = connection.multi.bind(connection)
+        connection.multi = ((...parameters: Parameters<Redis['multi']>) => {
+          const commands = multi(...parameters)
+          const exec = commands.exec.bind(commands)
+          commands.exec = (async () => {
+            const result = await exec()
+            closing = db.close()
+            return result
+          }) as typeof commands.exec
+          return commands
+        }) as typeof connection.multi
+        return connection
+      }
+      db = await Valkeyrie.open(redisDriver({ client, namespace: name }))
+      const other = await Valkeyrie.open(
+        redisDriver({ client: connect(), namespace: name }),
+      )
+      try {
+        const { versionstamp } = await db.set(['a'], 'original')
+        const result = await db
+          .atomic()
+          .check({ key: ['a'], versionstamp })
+          .set(['a'], 'committed')
+          .commit()
+        await closing
+        assert.ok(result.ok)
+        assert.strictEqual((await other.get(['a'])).value, 'committed')
+      } finally {
+        await db.close()
+        await other.close()
+      }
+    })
+
+    await test('a create-if-absent check fails when another client created the key first', async () => {
+      const name = namespace()
+      const other = await Valkeyrie.open(
+        redisDriver({ client: connect(), namespace: name }),
+      )
+      const db = await Valkeyrie.open(
+        interfereAfterRead(
+          redisDriver({ client: connect(), namespace: name }),
           () => other.set(['k'], 'other'),
         ),
       )
@@ -366,11 +488,11 @@ describe(
     await test('a commit retries on fresh data when another client changed a key it read', async () => {
       const name = namespace()
       const other = await Valkeyrie.open(
-        valkeyDriver({ client: connect(), namespace: name }),
+        redisDriver({ client: connect(), namespace: name }),
       )
       const db = await Valkeyrie.open(
         interfereAfterRead(
-          valkeyDriver({ client: connect(), namespace: name }),
+          redisDriver({ client: connect(), namespace: name }),
           () => other.set(['n'], new KvU64(10n)),
         ),
       )
@@ -387,7 +509,7 @@ describe(
       const name = namespace()
       const dbs = await Promise.all(
         Array.from({ length: 4 }, () =>
-          Valkeyrie.open(valkeyDriver({ client: connect(), namespace: name })),
+          Valkeyrie.open(redisDriver({ client: connect(), namespace: name })),
         ),
       )
       try {
@@ -411,12 +533,12 @@ describe(
     await test('a commit gives up after repeated conflicts', async () => {
       const name = namespace()
       const other = await Valkeyrie.open(
-        valkeyDriver({ client: connect(), namespace: name }),
+        redisDriver({ client: connect(), namespace: name }),
       )
       let interference = 0
       const db = await Valkeyrie.open(
         interfereAfterRead(
-          valkeyDriver({ client: connect(), namespace: name }),
+          redisDriver({ client: connect(), namespace: name }),
           () => other.set(['n'], new KvU64(BigInt(++interference))),
           Number.POSITIVE_INFINITY,
         ),
@@ -438,7 +560,7 @@ describe(
 
     await test('reads inside a commit see its earlier writes', async () => {
       const db = await Valkeyrie.open(
-        valkeyDriver({ client: connect(), namespace: namespace() }),
+        redisDriver({ client: connect(), namespace: namespace() }),
       )
       try {
         assert.ok((await db.atomic().sum(['n'], 1n).sum(['n'], 2n).commit()).ok)
@@ -454,11 +576,11 @@ describe(
 
     await test('concurrent commits on one instance run one at a time', async () => {
       const client = connect()
-      const driver = await valkeyDriver({ client, namespace: namespace() })(
+      const driver = await redisDriver({ client, namespace: namespace() })(
         v8Serializer,
       )
       const db = await Valkeyrie.open(
-        valkeyDriver({ client, namespace: namespace() }),
+        redisDriver({ client, namespace: namespace() }),
       )
       try {
         const events: string[] = []
@@ -499,10 +621,10 @@ describe(
     await test('commits release the keys they watched', async () => {
       const name = namespace()
       const other = await Valkeyrie.open(
-        valkeyDriver({ client: connect(), namespace: name }),
+        redisDriver({ client: connect(), namespace: name }),
       )
       const db = await Valkeyrie.open(
-        valkeyDriver({ client: connect(), namespace: name }),
+        redisDriver({ client: connect(), namespace: name }),
       )
       try {
         // A commit that throws after reading 's'.
@@ -538,7 +660,7 @@ describe(
         return connection
       }
       const db = await Valkeyrie.open(
-        valkeyDriver({ client, namespace: namespace() }),
+        redisDriver({ client, namespace: namespace() }),
       )
       await db.set(['k'], 1)
       assert.strictEqual(duplicates.length, 0)
@@ -614,14 +736,14 @@ describe(
     ]
 
     await test('list bounds select the same keys as on SQLite', async () => {
-      const valkey = await valkeyDriver({
+      const redis = await redisDriver({
         client: connect(),
         namespace: namespace(),
       })(v8Serializer)
       const sqlite = await sqliteDriver(':memory:', v8Serializer)
       try {
         for (const keyHash of ALL_KEYS) {
-          await valkey.set(keyHash, keyHash, '0'.repeat(20))
+          await redis.set(keyHash, keyHash, '0'.repeat(20))
           await sqlite.set(keyHash, keyHash, '0'.repeat(20))
         }
         const now = Date.now()
@@ -637,7 +759,7 @@ describe(
               10,
               reverse,
             )
-            const fromValkey = await valkey.list(
+            const fromValkey = await redis.list(
               start,
               end,
               prefix,
@@ -652,21 +774,21 @@ describe(
             )
             assert.deepStrictEqual(fromValkey, fromSqlite, `Valkey: ${label}`)
             assert.deepStrictEqual(
-              await valkey.list(start, end, prefix, now, 1, reverse),
+              await redis.list(start, end, prefix, now, 1, reverse),
               fromSqlite.slice(0, 1),
               `Valkey, limit 1: ${label}`,
             )
           }
         }
       } finally {
-        await valkey.close()
+        await redis.close()
         await sqlite.close()
       }
     })
 
     await test('list skips index members whose entry is gone or expired', async () => {
       const name = namespace()
-      const driver = await valkeyDriver({ client: connect(), namespace: name })(
+      const driver = await redisDriver({ client: connect(), namespace: name })(
         v8Serializer,
       )
       const entryKey = (keyHash: string) =>
@@ -715,7 +837,7 @@ describe(
     // A driver and the Redis keys of its namespace.
     async function openDriver(client = connect()) {
       const name = namespace()
-      const driver = await valkeyDriver({ client, namespace: name })(
+      const driver = await redisDriver({ client, namespace: name })(
         v8Serializer,
       )
       const keys = {
@@ -777,7 +899,7 @@ describe(
       t.mock.method(Date, 'now', () => now)
       const name = namespace()
       const db = await Valkeyrie.open(
-        valkeyDriver({ client: connect(), namespace: name }),
+        redisDriver({ client: connect(), namespace: name }),
       )
       try {
         await db.set(['set'], 1, { expireIn: 60_000 })
@@ -824,6 +946,97 @@ describe(
       }
     })
 
+    await test('public cleanup waits for the Redis operation and rejects connection errors', async () => {
+      const client = connect()
+      const db = await Valkeyrie.open(
+        redisDriver({ client, namespace: namespace() }),
+      )
+      const read = client.zrangebyscoreBuffer.bind(client)
+      const gate = Promise.withResolvers<void>()
+      const started = Promise.withResolvers<void>()
+      let finished = false
+      client.zrangebyscoreBuffer = (async (
+        ...args: Parameters<typeof read>
+      ) => {
+        started.resolve()
+        await gate.promise
+        return read(...args)
+      }) as typeof read
+      const cleaning = db.cleanup().then(() => {
+        finished = true
+      })
+      try {
+        await started.promise
+        await setTimeout(0)
+        assert.strictEqual(finished, false)
+        gate.resolve()
+        await cleaning
+        assert.strictEqual(finished, true)
+        client.disconnect()
+        await assert.rejects(db.cleanup(), /Connection is closed/)
+        await assert.rejects(
+          Valkeyrie.open(redisDriver({ client, namespace: namespace() })),
+          /Connection is closed/,
+        )
+        await client.connect()
+      } finally {
+        gate.resolve()
+        await cleaning
+        await db.close()
+      }
+    })
+
+    await test('cleanup cannot delete a refreshed key after its connection is lost', async () => {
+      const client = connect()
+      const name = namespace()
+      const driver = await redisDriver({ client, namespace: name })()
+      const other = await redisDriver({ client: connect(), namespace: name })()
+      const duplicate = client.duplicate.bind(client)
+      let interfered = false
+      client.duplicate = (...args: Parameters<Redis['duplicate']>) => {
+        const connection = duplicate(...args)
+        const read = connection.zrangebyscoreBuffer.bind(connection)
+        connection.zrangebyscoreBuffer = (async (
+          ...parameters: Parameters<typeof read>
+        ) => {
+          const result = await read(...parameters)
+          if (!interfered) {
+            interfered = true
+            const settled = Promise.race([
+              once(connection, 'ready'),
+              once(connection, 'end'),
+            ])
+            await admin.client(
+              'KILL',
+              'ID',
+              (await connection.client('ID')) as number,
+            )
+            await settled
+            await other.set('026100', 'refreshed', '00000000000000000002')
+          }
+          return result
+        }) as typeof read
+        return connection
+      }
+      try {
+        const expiry = Date.now() + 60_000
+        await driver.set('026100', 'old', '00000000000000000001', expiry)
+        await assert.rejects(driver.cleanup(expiry + 1))
+        assert.strictEqual(
+          (await other.get('026100', Date.now()))?.value,
+          'refreshed',
+        )
+        await driver.cleanup(expiry + 1)
+        assert.strictEqual(
+          (await other.get('026100', Date.now()))?.value,
+          'refreshed',
+        )
+      } finally {
+        await driver.close()
+        await other.close()
+      }
+    })
+
     await test('cleanup removes expired entries and their index members', async () => {
       const { driver, keys, members } = await openDriver()
       const [expired1, expired2, evicted, live, later] = [1, 2, 3, 4, 5].map(
@@ -855,7 +1068,7 @@ describe(
     await test('cleanup keeps a key that another client sets again meanwhile', async () => {
       const client = connect()
       const { driver, name, keys, members } = await openDriver(client)
-      const other = await valkeyDriver({ client: connect(), namespace: name })(
+      const other = await redisDriver({ client: connect(), namespace: name })(
         v8Serializer,
       )
       const keyHash = hex(0x02, 0x6b, 0x00)
@@ -932,7 +1145,7 @@ describe(
 
     await test('two processes can run cleanup together', async () => {
       const { driver: one, name, keys, members } = await openDriver()
-      const two = await valkeyDriver({ client: connect(), namespace: name })(
+      const two = await redisDriver({ client: connect(), namespace: name })(
         v8Serializer,
       )
       try {
@@ -961,7 +1174,7 @@ describe(
 
     await test('watch emits current values, then after each change through the same instance', async () => {
       const db = await Valkeyrie.open(
-        valkeyDriver({ client: connect(), namespace: namespace() }),
+        redisDriver({ client: connect(), namespace: namespace() }),
       )
       const reader = db.watch([['a'], ['b']]).getReader()
       const next = async () => {
@@ -1049,7 +1262,6 @@ describe(
         'watch',
         'multi',
         'exec',
-        'unwatch',
       ])
       // Sent by ioredis itself while it connects.
       const connectionSetup = new Set([
@@ -1073,7 +1285,7 @@ describe(
       }
 
       let driver: Driver | undefined
-      const factory = valkeyDriver({
+      const factory = redisDriver({
         client: record(connect()),
         namespace: namespace(),
       })
@@ -1122,7 +1334,7 @@ describe(
     await test('rejects a namespace that breaks the hash tag', () => {
       const client = connect()
       for (const name of ['', 'a}b', '{a']) {
-        assert.throws(() => valkeyDriver({ client, namespace: name }), {
+        assert.throws(() => redisDriver({ client, namespace: name }), {
           name: 'TypeError',
         })
       }

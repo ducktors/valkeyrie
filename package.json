@@ -19,9 +19,9 @@
       "types": "./dist/driver.d.ts",
       "default": "./dist/driver.js"
     },
-    "./drivers/valkey": {
-      "types": "./dist/valkey-driver.d.ts",
-      "default": "./dist/valkey-driver.js"
+    "./drivers/redis": {
+      "types": "./dist/redis-driver.d.ts",
+      "default": "./dist/redis-driver.js"
     },
     "./serializers": {
       "types": "./dist/serializers/serializer.d.ts",

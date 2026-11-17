@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { after } from 'node:test'
 import { Redis } from 'ioredis'
-import { valkeyDriver } from '../../src/valkey-driver.ts'
+import { redisDriver } from '../../src/redis-driver.ts'
 import type { TestDriver } from './test-driver.ts'
 
 /** The Redis or Valkey server the tests use. */
@@ -55,13 +55,13 @@ export async function removeNamespace(
   } while (cursor !== '0')
 }
 
-const valkey: TestDriver = {
-  name: 'valkey',
+const redis: TestDriver = {
+  name: 'redis',
   // Each database gets its own namespace, deleted when the database closes.
   open: async (serializer) => {
     const redis = await getClient()
     const namespace = testNamespace()
-    const driver = await valkeyDriver({ client: redis, namespace })(serializer)
+    const driver = await redisDriver({ client: redis, namespace })(serializer)
     return {
       ...driver,
       close: async () => {
@@ -74,10 +74,10 @@ const valkey: TestDriver = {
     const namespace = testNamespace()
     return {
       open: async (serializer) =>
-        valkeyDriver({ client: await getClient(), namespace })(serializer),
+        redisDriver({ client: await getClient(), namespace })(serializer),
       remove: async () => removeNamespace(await getClient(), namespace),
     }
   },
 }
 
-export default valkey
+export default redis
