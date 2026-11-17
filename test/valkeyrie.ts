@@ -2001,7 +2001,7 @@ describe('test valkeyrie', async () => {
       await setTimeout(1000)
 
       // Re-open to trigger immediate cleanup
-      db.close()
+      await db.close()
       db = null
       db = await Valkeyrie.open(database.open)
 
@@ -2024,7 +2024,7 @@ describe('test valkeyrie', async () => {
     } finally {
       if (db) {
         try {
-          db.close()
+          await db.close()
         } catch {
           // pass
         }
@@ -2055,7 +2055,7 @@ describe('test valkeyrie', async () => {
       await setTimeout(1000)
 
       // Re-open to trigger immediate cleanup
-      db.close()
+      await db.close()
       db = null
       db = await Valkeyrie.open(database.open)
 
@@ -2078,7 +2078,7 @@ describe('test valkeyrie', async () => {
     } finally {
       if (db) {
         try {
-          db.close()
+          await db.close()
         } catch {
           // pass
         }
