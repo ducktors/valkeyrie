@@ -94,7 +94,7 @@ The migration keeps:
 - **The versionstamp of each entry**, so `atomic().check()` with an old versionstamp still works.
 - **The expiry time of each entry.**
 
-The target must not exist. If the migration fails, it deletes the target, and the old store stays as it was.
+The target must not exist. The migration reserves the target path with exclusive file creation. If another process creates the target first, the migration stops without changing it. If copying fails, the migration deletes only the target files it created. The old store stays as it was.
 
 ## Keys with a NUL Byte
 

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { unlink } from 'node:fs/promises'
+import { open, unlink } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
 import { KEY_HASH_END, encodeKey } from './key-codec.ts'
 import type { Serializer } from './serializers/serializer.ts'
@@ -240,8 +240,8 @@ async function removeSqliteFiles(path: string): Promise<void> {
  * and the rows that were not copied.
  * @throws {Error} If the target exists, the source has a key format row, a row
  * cannot be migrated and `skipUnmigratable` is not set, or the migration cannot
- * create or write the target. The migration then leaves no target files, so
- * you can run it again with the same target path.
+ * create or write the target. The migration removes only the target files
+ * that it creates. It does not change an existing target.
  */
 export async function migrateSqliteKeyFormat(
   sourcePath: string,
@@ -296,10 +296,13 @@ export async function migrateSqliteKeyFormat(
     let target: DatabaseSync | undefined
     let migrated = 0
     let rekeyed = 0
+    // Reserve the path after validation. Another process can create it after
+    // the initial check; a failed reservation must not remove that file.
+    const targetFile = await open(targetPath, 'wx')
     try {
-      // An empty store gets the key format row with the serializer of the
-      // store. The driver creates the file before it calls the serializer, so
-      // this step can also fail after the file exists.
+      await targetFile.close()
+      // Initialize the reserved file with the store's serializer. Cleanup
+      // also covers failures before the driver finishes initialization.
       const targetStore = await Valkeyrie.open(targetPath, openOptions)
       await targetStore.close()
 

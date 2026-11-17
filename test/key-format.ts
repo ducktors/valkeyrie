@@ -1,7 +1,8 @@
 import assert from 'node:assert'
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import fs, { copyFileSync, existsSync } from 'node:fs'
 import { unlink } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, mock, test } from 'node:test'
@@ -9,7 +10,7 @@ import { Valkeyrie as LegacyValkeyrie } from 'valkeyrie-legacy'
 import { KvU64 as LegacyKvU64 } from 'valkeyrie-legacy/KvU64'
 import { jsonSerializer as legacyJsonSerializer } from 'valkeyrie-legacy/serializers/json'
 import { z } from 'zod'
-import { KEY_FORMAT_KEY_HASH } from '../src/key-format.ts'
+import { KEY_FORMAT, KEY_FORMAT_KEY_HASH } from '../src/key-format.ts'
 import { KvU64 } from '../src/kv-u64.ts'
 import { migrateKeyHash, migrateSqliteKeyFormat } from '../src/migrate.ts'
 import { jsonSerializer } from '../src/serializers/json.ts'
@@ -147,6 +148,48 @@ describe('key format', async () => {
           await Array.fromAsync(reopened.list({ prefix: [] })),
           [{ key: ['b'], value: 'value', versionstamp }],
         )
+      } finally {
+        await reopened.close()
+      }
+    })
+  })
+
+  await test('clear() keeps the format marker visible to another connection until it commits', async () => {
+    await withStores(async (source) => {
+      const deleted = Promise.withResolvers<void>()
+      const resume = Promise.withResolvers<void>()
+      const db = await Valkeyrie.open(async (serializer) => {
+        const driver = await sqliteDriver(source, serializer)
+        return {
+          ...driver,
+          clear: async () => {
+            await driver.clear()
+            deleted.resolve()
+            await resume.promise
+          },
+        }
+      })
+      await db.set(['a'], 'value')
+      const observer = await sqliteDriver(source)
+      const clearing = db.clear()
+      try {
+        await deleted.promise
+        assert.deepStrictEqual(
+          (await observer.get(KEY_FORMAT_KEY_HASH, 0))?.value,
+          { keyFormat: KEY_FORMAT },
+        )
+      } finally {
+        resume.resolve()
+        await clearing
+        await observer.close()
+        await db.close()
+      }
+
+      const reopened = await Valkeyrie.open(source)
+      try {
+        assert.strictEqual((await reopened.get(['a'])).value, null)
+        await reopened.set(['b'], 'new value')
+        assert.strictEqual((await reopened.get(['b'])).value, 'new value')
       } finally {
         await reopened.close()
       }
@@ -475,6 +518,53 @@ describe('key format', async () => {
       )
     })
   })
+
+  for (const key of ['a', 'b']) {
+    await test(`migrateSqliteKeyFormat() preserves a target created after the existence check with key ${key}`, async () => {
+      await withStores(async (source, target) => {
+        await withStores(async (competingTarget) => {
+          const legacy = await LegacyValkeyrie.open(source)
+          await legacy.set(['a'], 'source value')
+          await legacy.close()
+          const competing = await Valkeyrie.open(competingTarget)
+          const { versionstamp } = await competing.set([key], 'other value')
+          await competing.close()
+
+          const originalExistsSync = fs.existsSync
+          const existenceCheck = mock.method(
+            fs,
+            'existsSync',
+            (path: fs.PathLike) => {
+              const exists = originalExistsSync(path)
+              if (path === target && !exists) {
+                copyFileSync(competingTarget, target)
+              }
+              return exists
+            },
+          )
+          syncBuiltinESMExports()
+          try {
+            await assert.rejects(migrateSqliteKeyFormat(source, target), {
+              code: 'EEXIST',
+            })
+          } finally {
+            existenceCheck.mock.restore()
+            syncBuiltinESMExports()
+          }
+
+          const preserved = await Valkeyrie.open(target)
+          try {
+            assert.deepStrictEqual(
+              await Array.fromAsync(preserved.list({ prefix: [] })),
+              [{ key: [key], value: 'other value', versionstamp }],
+            )
+          } finally {
+            await preserved.close()
+          }
+        })
+      })
+    })
+  }
 
   await test('migrateSqliteKeyFormat() should throw when the source has a key format row', async () => {
     await withStores(async (source, target) => {
