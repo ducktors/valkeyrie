@@ -82,6 +82,13 @@ The tests run on the built-in SQLite driver. To run them on another driver, set 
 VALKEYRIE_TEST_DRIVER=./my-driver.ts pnpm test
 ```
 
+The Redis driver's own tests (`test/redis-driver.ts`) run only when `VALKEYRIE_TEST_REDIS_URL` points to a Redis or Valkey server. To run them, and the shared suite on the Redis driver:
+
+```bash
+docker run -d --rm -p 6379:6379 valkey/valkey:8
+VALKEYRIE_TEST_REDIS_URL=redis://localhost:6379 VALKEYRIE_TEST_DRIVER=redis pnpm test
+```
+
 ### Coding Standards
 
 - Follow the existing code style
@@ -101,3 +108,19 @@ VALKEYRIE_TEST_DRIVER=./my-driver.ts pnpm test
 All project communication, documentation, bug reports, and pull requests should be in English.
 
 For questions about using Valkeyrie, please open a GitHub Discussion rather than an issue.
+
+### Redis Cluster Tests
+
+The cluster fixture starts one primary and one replica. It is separate from the standalone server.
+
+```bash
+docker run -d --rm --name valkeyrie-cluster -p 17300:17300 -p 17301:17301 \
+  -v "$PWD/test/fixtures/redis-cluster.sh:/cluster.sh:ro" redis:7.2 sh /cluster.sh
+```
+
+Wait until `docker exec valkeyrie-cluster test -f /tmp/cluster-ready` succeeds, then run:
+
+```bash
+VALKEYRIE_TEST_REDIS_CLUSTER_URL=redis://127.0.0.1:17300 node --test test/redis-cluster.ts
+docker stop valkeyrie-cluster
+```

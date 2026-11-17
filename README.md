@@ -34,7 +34,7 @@ This is still a work in progress, but the API and everything already implemented
 - **Automatic type inference** - Full TypeScript support with schema-based type inference across all operations
 - **Atomic operations** - Perform multiple operations in a single transaction with optimistic locking
 - **Real-time updates** - Watch keys for changes with the `watch()` API
-- **Pluggable storage drivers** - Currently SQLite-based, with support for more drivers coming soon. Custom drivers are reachable today by passing a driver function to the public `open()` API and via the `driverFn` option in factory methods.
+- **Pluggable storage drivers** - SQLite by default, and a [Redis and Valkey driver](./docs/guides/redis-driver.md) for databases that several processes share. Custom drivers are reachable by passing a driver function to the public `open()` API and via the `driverFn` option in factory methods.
 - **Rich data type support** - Store objects, arrays, dates, binary data, Maps, Sets, and more
 - **Hierarchical keys** - Organize data with multi-part keys for efficient querying
 - **Efficient querying** - List data with prefix and range queries
@@ -193,6 +193,7 @@ See [Upgrading to 0.9](./docs/guides/upgrading.md) for the complete steps and fo
 - **[Schema Validation](./docs/guides/schema-validation.md)** - Type-safe operations with Zod, Valibot, and ArkType
 - **[Factory Methods](./docs/guides/factory-methods.md)** - Create and populate databases from data sources
 - **[Serializers](./docs/guides/serializers.md)** - Choose and configure the right serializer
+- **[Redis and Valkey Driver](./docs/guides/redis-driver.md)** - Share a database between processes through Valkey or Redis
 - **[Advanced Patterns](./docs/guides/advanced-patterns.md)** - Atomic operations, watch API, and real-world patterns
 - **[Upgrading to 0.9](./docs/guides/upgrading.md)** - Migrate a store that Valkeyrie 0.8 or earlier wrote
 
