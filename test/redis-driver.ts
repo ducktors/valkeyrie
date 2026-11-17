@@ -4,6 +4,8 @@ import { after, describe, test } from 'node:test'
 import { setTimeout } from 'node:timers/promises'
 import { Redis } from 'ioredis'
 import type { Driver } from '../src/driver.ts'
+import { decodeKey } from '../src/key-codec.ts'
+import { KEY_FORMAT_KEY_HASH } from '../src/key-format.ts'
 import { KvU64 } from '../src/kv-u64.ts'
 import { redisDriver } from '../src/redis-driver.ts'
 import { jsonSerializer } from '../src/serializers/json.ts'
@@ -44,7 +46,9 @@ describe(
         return {
           ...driver,
           set: (keyHash, ...rest) => {
-            keyHashes.push(keyHash)
+            if (keyHash !== KEY_FORMAT_KEY_HASH) {
+              keyHashes.push(keyHash)
+            }
             return driver.set(keyHash, ...rest)
           },
         }
@@ -72,7 +76,7 @@ describe(
             }),
           get: async (keyHash, now) => {
             const result = await driver.get(keyHash, now)
-            if (armed) {
+            if (armed && keyHash !== KEY_FORMAT_KEY_HASH) {
               armed = false
               remaining--
               await interfere()
@@ -190,12 +194,12 @@ describe(
         assert.strictEqual(await admin.exists(entryKey), 1)
         assert.deepStrictEqual(
           await admin.zrangeBuffer(`{${name}}:idx`, 0, -1),
-          [keyBytes],
+          [keyBytes, Buffer.from(KEY_FORMAT_KEY_HASH, 'hex')],
         )
 
         await db.delete(['users', 42])
         assert.strictEqual(await admin.exists(entryKey), 0)
-        assert.strictEqual(await admin.zcard(`{${name}}:idx`), 0)
+        assert.strictEqual(await admin.zcard(`{${name}}:idx`), 1)
       } finally {
         await db.close()
       }
@@ -227,15 +231,12 @@ describe(
           await db.set(key, 'v')
         }
 
-        const members = (await admin.zrangeBuffer(`{${name}}:idx`, 0, -1)).map(
-          (member) => member.toString('hex'),
-        )
+        const members = (await admin.zrangeBuffer(`{${name}}:idx`, 0, -1))
+          .map((member) => member.toString('hex'))
+          .filter((keyHash) => keyHash !== KEY_FORMAT_KEY_HASH)
         assert.deepStrictEqual(members.toSorted(), keyHashes.toSorted())
 
-        const decoded = members.map((member) =>
-          // @ts-expect-error Accessing private method for testing
-          db.decodeKeyHash(member),
-        )
+        const decoded = members.map((member) => decodeKey(member))
         for (const key of keys) {
           assert.ok(
             decoded.some((candidate) => {
@@ -274,6 +275,8 @@ describe(
         redisDriver({ client: connect(), namespace: namespace() }),
         { serializer: spy },
       )
+      calls.serialize = 0
+      calls.deserialize = 0
       try {
         await db.set(['k'], { a: 1 })
         assert.deepStrictEqual((await db.get(['k'])).value, { a: 1 })
@@ -422,6 +425,7 @@ describe(
       const name = namespace()
       const client = connect()
       let closing: Promise<void> | undefined
+      let closeOnExec = false
       let db: Valkeyrie
       const duplicate = client.duplicate.bind(client)
       client.duplicate = (...args: Parameters<Redis['duplicate']>) => {
@@ -432,7 +436,9 @@ describe(
           const exec = commands.exec.bind(commands)
           commands.exec = (async () => {
             const result = await exec()
-            closing = db.close()
+            if (closeOnExec) {
+              closing = db.close()
+            }
             return result
           }) as typeof commands.exec
           return commands
@@ -445,6 +451,7 @@ describe(
       )
       try {
         const { versionstamp } = await db.set(['a'], 'original')
+        closeOnExec = true
         const result = await db
           .atomic()
           .check({ key: ['a'], versionstamp })
@@ -663,7 +670,7 @@ describe(
         redisDriver({ client, namespace: namespace() }),
       )
       await db.set(['k'], 1)
-      assert.strictEqual(duplicates.length, 0)
+      assert.strictEqual(duplicates.length, 1)
 
       await db.atomic().sum(['n'], 1n).commit()
       await db.atomic().sum(['n'], 1n).commit()
@@ -912,7 +919,13 @@ describe(
         assert.strictEqual((await db.get(['atomic'])).value, 2)
 
         // Redis keeps each entry for the time left on the caller's clock.
-        const entryKeys = await admin.keysBuffer(`{${name}}:e:*`)
+        const metadataKey = Buffer.concat([
+          Buffer.from(`{${name}}:e:`),
+          Buffer.from(KEY_FORMAT_KEY_HASH, 'hex'),
+        ])
+        const entryKeys = (await admin.keysBuffer(`{${name}}:e:*`)).filter(
+          (key) => !key.equals(metadataKey),
+        )
         assert.strictEqual(entryKeys.length, 2)
         for (const entryKey of entryKeys) {
           const ttl = await admin.pttl(entryKey)

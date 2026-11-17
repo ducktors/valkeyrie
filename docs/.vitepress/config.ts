@@ -40,6 +40,7 @@ export default defineConfig({
             { text: 'Serializers', link: '/guides/serializers' },
             { text: 'Redis and Valkey Driver', link: '/guides/redis-driver' },
             { text: 'Advanced Patterns', link: '/guides/advanced-patterns' },
+            { text: 'Upgrading to 0.9', link: '/guides/upgrading' },
           ]
         }
       ],
