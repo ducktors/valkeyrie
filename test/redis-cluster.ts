@@ -15,7 +15,7 @@ test(
       clusterUrl === undefined && 'set VALKEYRIE_TEST_REDIS_CLUSTER_URL to run',
     timeout: 15_000,
   },
-  async () => {
+  async (context) => {
     const url = new URL(clusterUrl as string)
     const client = new Cluster(
       [{ host: url.hostname, port: Number(url.port) }],
@@ -24,6 +24,7 @@ test(
         scaleReads: 'slave',
       },
     )
+    context.after(() => client.disconnect())
     await client.connect()
     const primaryNode = client.nodes('master')[0]
     const replicaNode = client.nodes('slave')[0]
@@ -31,6 +32,10 @@ test(
     assert.ok(replicaNode)
     const primary = new Redis(primaryNode.options)
     const replica = new Redis(replicaNode.options)
+    context.after(() => {
+      primary.disconnect()
+      replica.disconnect()
+    })
     const namespace = `redis-cluster-test:${randomUUID()}`
     const writer = await Valkeyrie.open(
       redisDriver({ client: primary, namespace }),

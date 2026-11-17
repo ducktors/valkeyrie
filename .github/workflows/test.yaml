@@ -106,6 +106,7 @@ jobs:
 
   redis-cluster:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     name: Redis Cluster driver
     env:
       VALKEYRIE_TEST_REDIS_CLUSTER_URL: redis://127.0.0.1:17300
