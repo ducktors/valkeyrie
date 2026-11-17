@@ -155,30 +155,46 @@ export const sqliteDriver = defineDriver(
       >
     }> = []
 
-    // Function to notify watchers of changes
+    /**
+     * Publishes committed values. A transaction publishes once after commit,
+     * so its intermediate writes and rolled-back changes stay out of the stream.
+     * A watcher that cannot read its values gets the error on its stream and
+     * leaves the queue. The write has already happened, so the error does not
+     * reach the writer or the other watchers.
+     *
+     * @returns Resolves after the current values are queued for watchers.
+     */
     async function notifyWatchers() {
+      if (transactionState.inTransaction) return
+
       const now = Date.now()
-      for (const watcher of watchQueue) {
-        const results = await Promise.all(
-          watcher.keyHashes.map(async (keyHash) => {
-            const result = statements.get.get(keyHash, now) as
-              | SqlRow
-              | undefined
-            if (!result) {
-              return {
-                keyHash,
-                value: null,
-                versionstamp: null,
+      for (const watcher of [...watchQueue]) {
+        try {
+          const results = await Promise.all(
+            watcher.keyHashes.map(async (keyHash) => {
+              const result = statements.get.get(keyHash, now) as
+                | SqlRow
+                | undefined
+              if (!result) {
+                return {
+                  keyHash,
+                  value: null,
+                  versionstamp: null,
+                }
               }
-            }
-            return {
-              keyHash: result.key_hash,
-              value: serializer.deserialize(result.value),
-              versionstamp: result.versionstamp,
-            }
-          }),
-        )
-        watcher.controller.enqueue(results)
+              return {
+                keyHash: result.key_hash,
+                value: serializer.deserialize(result.value),
+                versionstamp: result.versionstamp,
+              }
+            }),
+          )
+          watcher.controller.enqueue(results)
+        } catch (error) {
+          const index = watchQueue.indexOf(watcher)
+          if (index !== -1) watchQueue.splice(index, 1)
+          watcher.controller.error(error)
+        }
       }
     }
 

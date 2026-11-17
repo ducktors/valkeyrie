@@ -88,6 +88,9 @@ importers:
       validate-package-exports:
         specifier: ^1.0.1
         version: 1.0.1
+      valkeyrie-legacy:
+        specifier: npm:valkeyrie@0.8.4
+        version: valkeyrie@0.8.4(bson@6.10.3)(cbor-x@1.6.0)(msgpackr@1.11.2)
       vitepress:
         specifier: ^1.6.4
         version: 1.6.4(@algolia/client-search@5.43.0)(@types/node@22.13.13)(jiti@2.4.2)(postcss@8.5.12)(search-insights@2.17.3)(typescript@5.8.2)(yaml@2.8.3)
@@ -2624,6 +2627,21 @@ packages:
     resolution: {integrity: sha512-wd6TJDE3Li81mzM8h6IcqQfiBySIk5rfrATZLeKpkPxpU9SaFRh9Kyj0Tj7LMYyuT+1CaYLOhaCrC9gI8D2/jw==}
     engines: {node: '>=22.22.2'}
     hasBin: true
+
+  valkeyrie@0.8.4:
+    resolution: {integrity: sha512-mcZan9O1O3uxXNYzzDALnYYUKmgQF9TfCIcCzwqMM6cB2EYkq0miwf2aSvaFPDhpjvlzZJlFd3tNSO4QeHmgjg==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      bson: ^6.10.3
+      cbor-x: ^1.6.0
+      msgpackr: ^1.11.2
+    peerDependenciesMeta:
+      bson:
+        optional: true
+      cbor-x:
+        optional: true
+      msgpackr:
+        optional: true
 
   vfile-message@4.0.3:
     resolution: {integrity: sha512-QTHzsGd1EhbZs4AsQ20JX1rC3cOlt/IWJruk893DfLRr57lcnOeMaWG4K0JrRta4mIJZKth2Au3mM3u03/JWKw==}
@@ -5431,6 +5449,14 @@ snapshots:
       npm-packlist: 11.2.0
     transitivePeerDependencies:
       - supports-color
+
+  valkeyrie@0.8.4(bson@6.10.3)(cbor-x@1.6.0)(msgpackr@1.11.2):
+    dependencies:
+      '@standard-schema/spec': 1.0.0
+    optionalDependencies:
+      bson: 6.10.3
+      cbor-x: 1.6.0
+      msgpackr: 1.11.2
 
   vfile-message@4.0.3:
     dependencies:

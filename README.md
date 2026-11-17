@@ -23,6 +23,7 @@ This is still a work in progress, but the API and everything already implemented
   - [Hierarchical Keys](#hierarchical-keys)
   - [Value Types](#value-types)
   - [Basic Operations](#basic-operations)
+- [Upgrading from 0.8](#upgrading-from-08)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
 - [License](#license)
@@ -172,6 +173,18 @@ await db.clear();
 await db.destroy();
 ```
 
+## Upgrading from 0.8
+
+Valkeyrie 0.9 stores a key with a `0x00` byte inside a string or `Uint8Array` part with new bytes. It does not open a store that Valkeyrie 0.8 or earlier wrote: `open()` throws `KeyFormatError` and changes nothing. In-memory stores and new stores need no change. To keep the data of a SQLite store, stop all processes that use it, back it up, and copy it to a new file:
+
+```typescript
+import { migrateSqliteKeyFormat } from 'valkeyrie/migrate';
+
+await migrateSqliteKeyFormat('./data.db', './data-0.9.db');
+```
+
+See [Upgrading to 0.9](./docs/guides/upgrading.md) for the complete steps and for custom drivers.
+
 ## Documentation
 
 ### Guides
@@ -181,6 +194,7 @@ await db.destroy();
 - **[Factory Methods](./docs/guides/factory-methods.md)** - Create and populate databases from data sources
 - **[Serializers](./docs/guides/serializers.md)** - Choose and configure the right serializer
 - **[Advanced Patterns](./docs/guides/advanced-patterns.md)** - Atomic operations, watch API, and real-world patterns
+- **[Upgrading to 0.9](./docs/guides/upgrading.md)** - Migrate a store that Valkeyrie 0.8 or earlier wrote
 
 ### API Reference
 

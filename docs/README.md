@@ -45,6 +45,11 @@ Feature-specific guides for different use cases:
   - Multi-instance concurrency
   - Real-world patterns (sessions, caching, events)
 
+- **[Upgrading to 0.9](./guides/upgrading.md)**
+  - Key format check when a store opens
+  - Migrating a SQLite store from Valkeyrie 0.8
+  - Migrating the store of a custom driver
+
 ### API Reference
 
 Complete technical reference:

@@ -39,6 +39,7 @@ export default defineConfig({
             { text: 'Factory Methods', link: '/guides/factory-methods' },
             { text: 'Serializers', link: '/guides/serializers' },
             { text: 'Advanced Patterns', link: '/guides/advanced-patterns' },
+            { text: 'Upgrading to 0.9', link: '/guides/upgrading' },
           ]
         }
       ],
