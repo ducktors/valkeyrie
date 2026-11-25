@@ -89,6 +89,14 @@ docker run -d --rm -p 6379:6379 valkey/valkey:8
 VALKEYRIE_TEST_REDIS_URL=redis://localhost:6379 VALKEYRIE_TEST_DRIVER=redis pnpm test
 ```
 
+The MongoDB driver's own tests (`test/mongodb-driver.ts`) run only when `VALKEYRIE_TEST_MONGODB_URL` points to a MongoDB replica set. A single-node replica set is enough:
+
+```bash
+docker run -d --rm --name valkeyrie-mongodb -p 27017:27017 mongo:8 --replSet rs0
+docker exec valkeyrie-mongodb mongosh --quiet --eval 'rs.initiate()'
+VALKEYRIE_TEST_MONGODB_URL='mongodb://localhost:27017/?directConnection=true' VALKEYRIE_TEST_DRIVER=mongodb pnpm test
+```
+
 ### Coding Standards
 
 - Follow the existing code style

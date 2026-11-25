@@ -104,6 +104,61 @@ jobs:
       - name: Run the shared suite and the driver tests
         run: node --test ./test/valkeyrie.ts ./test/redis-driver.ts
 
+  mongodb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: MongoDB driver (${{ matrix.image }})
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['mongo:7.0', 'mongo:8.0']
+    env:
+      VALKEYRIE_TEST_DRIVER: mongodb
+      VALKEYRIE_TEST_MONGODB_URL: mongodb://localhost:27017/?directConnection=true
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        name: Checkout
+      - name: Use Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        name: Install pnpm
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Install with pnpm
+        run: pnpm install
+      # A service container cannot take the --replSet argument, and
+      # transactions need a replica set.
+      - name: Start a single-node replica set
+        run: |
+          docker run -d --name mongodb -p 27017:27017 ${{ matrix.image }} --replSet rs0
+          for attempt in $(seq 1 30); do
+            if docker exec mongodb mongosh --quiet --eval \
+              'try { rs.status().ok } catch { rs.initiate().ok }' 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          for attempt in $(seq 1 30); do
+            if [ "$(docker exec mongodb mongosh --quiet --eval 'db.hello().isWritablePrimary')" = "true" ]; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs mongodb
+          exit 1
+      - name: Run the shared suite and the driver tests
+        run: node --test ./test/valkeyrie.ts ./test/mongodb-driver.ts
+      - name: Stop the replica set
+        if: always()
+        run: docker rm -f mongodb
+
   redis-cluster:
     runs-on: ubuntu-latest
     timeout-minutes: 5
