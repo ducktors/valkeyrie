@@ -20,8 +20,9 @@ export type MongodbNamespace = string | number | BsonValue
 export interface MongodbDriverOptions {
   /**
    * A connected MongoDB client. The caller owns it: the driver never closes
-   * it. The server must be a replica set or a sharded cluster, because atomic
-   * commits use transactions.
+   * it. The server must be a replica set or a sharded cluster, because writes
+   * use transactions. Its BSON options, such as `promoteBuffers`, do not
+   * apply to the driver's collections.
    */
   client: MongoClient
   /**
@@ -61,7 +62,8 @@ interface Transaction {
   changes: Map<string, Change>
 }
 
-// The binary value of a stored entry. bson 4 and later all have these fields.
+// The binary value of a stored entry, as the BSON options below read it. bson
+// 4 and later all have these fields.
 interface StoredBinary {
   buffer: Uint8Array
   position: number
@@ -74,10 +76,21 @@ interface EntryDocument {
   expiresAt?: number | null
 }
 
-// Every commit writes this row first. Two commits in one namespace then write
-// the same document, so MongoDB lets only one of them commit, and a value
-// that a commit read cannot change before it commits. The hash starts with
-// KEY_HASH_END, so no key has it and no list returns it.
+// How the driver reads documents, whatever the caller's client sets: values
+// as Binary, numbers as numbers. Collection options override the client's.
+const BSON_OPTIONS = {
+  promoteBuffers: false,
+  promoteValues: true,
+  promoteLongs: true,
+  useBigInt64: false,
+  raw: false,
+}
+
+// Every write, plain or in a commit, writes this row first, in a transaction.
+// Two writes in one namespace then write the same document, so MongoDB lets
+// only one of them commit, and a value that a commit read cannot change
+// before it commits. The hash starts with KEY_HASH_END, so no key has it, and
+// list() skips it.
 const COMMIT_LOCK_KEY_HASH = `${KEY_HASH_END}${Buffer.from('commit-lock').toString('hex')}`
 
 // How often a commit runs again after it conflicted with another commit.
@@ -207,8 +220,8 @@ export function mongodbDriver({
   return async (serializerInit) => {
     const serializer = (serializerInit ?? v8Serializer)()
     const db = client.db(dbName)
-    const entries = db.collection(collectionName)
-    const sequences = db.collection(sequenceCollectionName)
+    const entries = db.collection(collectionName, BSON_OPTIONS)
+    const sequences = db.collection(sequenceCollectionName, BSON_OPTIONS)
 
     await checkCollation(db, collectionName)
     await entries.createIndex(
@@ -361,6 +374,22 @@ export function mongodbDriver({
       }
     }
 
+    // Commits of one driver instance run one at a time. Commits of other
+    // instances conflict on the commit lock row, and the one that loses runs
+    // again on fresh data, so a check that no longer holds returns
+    // `{ ok: false }`. After COMMIT_ATTEMPTS the driver throws, and Valkeyrie
+    // reports the commit as `{ ok: false }`.
+    const withTransaction = async <T>(
+      callback: () => Promise<T>,
+    ): Promise<T> => {
+      if (transactions.getStore() !== undefined) {
+        return await callback()
+      }
+      const { result, changes } = await lock(() => runTransaction(callback))
+      await notify(changes)
+      return result
+    }
+
     const driver: Driver = {
       get: async (keyHash, now) => {
         const doc = await entries.findOne(
@@ -369,32 +398,36 @@ export function mongodbDriver({
         )
         return doc === null ? undefined : decode(doc)
       },
-      set: async (keyHash, value, versionstamp, expiresAt) => {
-        const serialized = serializer.serialize(value)
-        await entries.updateOne(
-          { ...scope, keyHash },
-          expiresAt
-            ? { $set: { value: serialized, versionstamp, expiresAt } }
-            : {
-                $set: { value: serialized, versionstamp },
-                $unset: { expiresAt: '' },
-              },
-          { upsert: true, ...inTransaction() },
-        )
-        // Watchers get the value as a later get() returns it.
-        await publish(
-          new Map([
-            [
-              keyHash,
-              { value: serializer.deserialize(serialized), versionstamp },
-            ],
-          ]),
-        )
-      },
-      delete: async (keyHash) => {
-        await entries.deleteOne({ ...scope, keyHash }, inTransaction())
-        await publish(new Map([[keyHash, null]]))
-      },
+      // A write outside a commit is a commit of its own, so that it takes the
+      // commit lock row and cannot change a value that a running commit read.
+      set: (keyHash, value, versionstamp, expiresAt) =>
+        withTransaction(async () => {
+          const serialized = serializer.serialize(value)
+          await entries.updateOne(
+            { ...scope, keyHash },
+            expiresAt
+              ? { $set: { value: serialized, versionstamp, expiresAt } }
+              : {
+                  $set: { value: serialized, versionstamp },
+                  $unset: { expiresAt: '' },
+                },
+            { upsert: true, ...inTransaction() },
+          )
+          // Watchers get the value as a later get() returns it.
+          await publish(
+            new Map([
+              [
+                keyHash,
+                { value: serializer.deserialize(serialized), versionstamp },
+              ],
+            ]),
+          )
+        }),
+      delete: (keyHash) =>
+        withTransaction(async () => {
+          await entries.deleteOne({ ...scope, keyHash }, inTransaction())
+          await publish(new Map([[keyHash, null]]))
+        }),
       generateVersionstamp: async () => {
         // includeResultMetadata returns the same result shape in every
         // version of the MongoDB driver.
@@ -420,19 +453,7 @@ export function mongodbDriver({
           .toString(16)
           .padStart(20, '0')
       },
-      // Commits of one driver instance run one at a time. Commits of other
-      // instances conflict on the commit lock row, and the one that loses
-      // runs again on fresh data, so a check that no longer holds returns
-      // `{ ok: false }`. After COMMIT_ATTEMPTS the driver throws, and
-      // Valkeyrie reports the commit as `{ ok: false }`.
-      withTransaction: async <T>(callback: () => Promise<T>): Promise<T> => {
-        if (transactions.getStore() !== undefined) {
-          return await callback()
-        }
-        const { result, changes } = await lock(() => runTransaction(callback))
-        await notify(changes)
-        return result
-      },
+      withTransaction,
       list: async (
         startHash,
         endHash,
@@ -445,7 +466,11 @@ export function mongodbDriver({
           .find(
             {
               ...scope,
-              keyHash: { $gte: startHash, $lt: endHash, $ne: prefixHash },
+              keyHash: {
+                $gte: startHash,
+                $lt: endHash,
+                $nin: [prefixHash, COMMIT_LOCK_KEY_HASH],
+              },
               ...live(now),
             },
             inTransaction(),
@@ -512,15 +537,17 @@ export function mongodbDriver({
         })
       },
       // Keeps the versionstamp sequence, like the SQLite driver.
-      clear: async () => {
-        await entries.deleteMany(scope, inTransaction())
-        await publish(everyWatchedKey())
-      },
-      destroy: async () => {
-        await entries.deleteMany(scope, inTransaction())
-        await sequences.deleteMany(scope, inTransaction())
-        await publish(everyWatchedKey())
-      },
+      clear: () =>
+        withTransaction(async () => {
+          await entries.deleteMany(scope, inTransaction())
+          await publish(everyWatchedKey())
+        }),
+      destroy: () =>
+        withTransaction(async () => {
+          await entries.deleteMany(scope, inTransaction())
+          await sequences.deleteMany(scope, inTransaction())
+          await publish(everyWatchedKey())
+        }),
       // Ends the watches and waits for a running commit. The caller's client
       // stays open.
       close: async () => {

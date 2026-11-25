@@ -55,7 +55,9 @@ The options are:
 
 ## Client Ownership
 
-You create the client, and you close it. `db.close()` does not close your client. The driver opens a session for each atomic commit and ends it when the commit ends.
+You create the client, and you close it. `db.close()` does not close your client. The driver opens a session for each write and ends it when the write ends.
+
+The client's BSON options, such as `promoteBuffers` or `useBigInt64`, do not change how the driver reads its own collections: it sets the options it needs on them.
 
 ## Namespaces
 
@@ -111,10 +113,11 @@ The driver does not use a TTL index: MongoDB would delete expired documents with
 
 - A check that does not hold returns `{ ok: false }`, as with SQLite.
 - Every commit first writes the commit lock row of its namespace. Two commits of one namespace therefore conflict, and MongoDB lets only one commit. The other runs again on the new data, after 5–20 ms, so a check that no longer holds returns `{ ok: false }`, and a sum on a busy counter succeeds. Without the lock row, two commits that each check a key that the other writes could both succeed.
-- After 10 conflicts in a row, the commit returns `{ ok: false }`.
+- Plain `set`, `delete`, `clear` and `destroy` calls are commits of their own: each writes the lock row too, in its own transaction. A plain write from another process therefore cannot change a key that a running commit checked; it waits for the commit, as with SQLite.
+- After 10 conflicts in a row, the commit returns `{ ok: false }`, and a plain write throws the conflict error.
 - A commit that throws, such as a `sum` on a value that is not a `KvU64`, writes nothing.
 
-One driver instance runs one commit at a time, and commits of one namespace in different processes take turns through the lock row. Plain `set` and `delete` calls do not take the lock. Spread unrelated data over namespaces if many processes commit at once.
+One driver instance runs one write at a time, and the writes of one namespace in different processes take turns through the lock row. A plain write costs a transaction: a few round trips instead of one. Spread unrelated data over namespaces if many processes write at once.
 
 ## Watching Keys
 

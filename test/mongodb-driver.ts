@@ -1,7 +1,13 @@
 import assert from 'node:assert'
-import { after, describe, test } from 'node:test'
+import { type TestContext, after, describe, test } from 'node:test'
 import { setTimeout } from 'node:timers/promises'
-import { Binary, Collection, MongoClient, ObjectId } from 'mongodb'
+import {
+  Binary,
+  type ClientSession,
+  Collection,
+  MongoClient,
+  ObjectId,
+} from 'mongodb'
 import { KEY_FORMAT_KEY_HASH } from '../src/key-format.ts'
 import { KvU64 } from '../src/kv-u64.ts'
 import { mongodbDriver } from '../src/mongodb-driver.ts'
@@ -99,6 +105,23 @@ describe(
           },
         }
       }
+    }
+
+    // Counts the transactions that `client` starts: one per attempt of a
+    // commit, also an attempt that conflicts on the commit lock row.
+    function countAttempts(t: TestContext, client: MongoClient) {
+      const attempts = { count: 0 }
+      const startSession = client.startSession.bind(client)
+      t.mock.method(client, 'startSession', (...args: unknown[]) => {
+        const session: ClientSession = Reflect.apply(startSession, client, args)
+        const startTransaction = session.startTransaction.bind(session)
+        session.startTransaction = (...options) => {
+          attempts.count++
+          return startTransaction(...options)
+        }
+        return session
+      })
+      return attempts
     }
 
     // Rejects if a watch read does not arrive promptly, so a missing event
@@ -302,11 +325,53 @@ describe(
       }
     })
 
-    await test('a commit writes nothing when another client changed a checked key', async () => {
+    await test('works whatever BSON options the caller’s client sets', async () => {
+      // promoteBuffers reads values as Buffers, promoteValues: false reads
+      // the sequence as an Int32.
+      const client = new MongoClient(mongodbUrl as string, {
+        promoteBuffers: true,
+        promoteValues: false,
+      })
+      clients.push(client)
+      const db = await Valkeyrie.open(driverFor(namespace(), client))
+      const { versionstamp } = await db.set(['a'], { n: 1 })
+      // The first event of a watch reads the value.
+      const reader = db.watch([['a']]).getReader()
+      try {
+        assert.deepStrictEqual(await db.get(['a']), {
+          key: ['a'],
+          value: { n: 1 },
+          versionstamp,
+        })
+        assert.deepStrictEqual(
+          (await Array.fromAsync(db.list({ prefix: [] }))).map(
+            (entry) => entry.value,
+          ),
+          [{ n: 1 }],
+        )
+        assert.deepStrictEqual((await readWithin(reader))?.[0]?.value, {
+          n: 1,
+        })
+      } finally {
+        await reader.cancel()
+        await db.close()
+      }
+    })
+
+    await test('a plain write from another client waits for a commit that checked its key', async () => {
+      // The commit checks 'k' but writes only 'side', so only the commit lock
+      // row can make the other client's write conflict with it.
       const name = namespace()
       const other = await Valkeyrie.open(driverFor(name))
+      const events: string[] = []
+      let otherWrite: Promise<unknown> | undefined
       const db = await Valkeyrie.open(
-        interfereAfterRead(driverFor(name), () => other.set(['k'], 'other')),
+        interfereAfterRead(driverFor(name), async () => {
+          otherWrite = other
+            .set(['k'], 'other')
+            .then(() => events.push('other set'))
+          await setTimeout(20)
+        }),
       )
       try {
         const { versionstamp } = await db.set(['k'], 'mine')
@@ -314,23 +379,32 @@ describe(
           .atomic()
           .check({ key: ['k'], versionstamp })
           .set(['side'], 'commit')
-          .set(['k'], 'commit')
           .commit()
+        events.push('commit')
+        await otherWrite
 
-        assert.deepStrictEqual(result, { ok: false })
+        assert.ok(result.ok)
+        assert.deepStrictEqual(events, ['commit', 'other set'])
         assert.strictEqual((await db.get(['k'])).value, 'other')
-        assert.strictEqual((await db.get(['side'])).versionstamp, null)
       } finally {
         await db.close()
         await other.close()
       }
     })
 
-    await test('a create-if-absent check fails when another client created the key first', async () => {
+    await test('of two create-if-absent commits from different clients, only the first succeeds', async () => {
       const name = namespace()
       const other = await Valkeyrie.open(driverFor(name))
+      let otherCommit: Promise<{ ok: boolean }> | undefined
       const db = await Valkeyrie.open(
-        interfereAfterRead(driverFor(name), () => other.set(['k'], 'other')),
+        interfereAfterRead(driverFor(name), async () => {
+          otherCommit = other
+            .atomic()
+            .check({ key: ['k'], versionstamp: null })
+            .set(['k'], 'other')
+            .commit()
+          await setTimeout(20)
+        }),
       )
       try {
         const result = await db
@@ -339,24 +413,32 @@ describe(
           .set(['k'], 'mine')
           .commit()
 
-        assert.deepStrictEqual(result, { ok: false })
-        assert.strictEqual((await db.get(['k'])).value, 'other')
+        assert.ok(result.ok)
+        assert.deepStrictEqual(await otherCommit, { ok: false })
+        assert.strictEqual((await db.get(['k'])).value, 'mine')
       } finally {
         await db.close()
         await other.close()
       }
     })
 
-    await test('a commit retries on fresh data when another client changed a key it read', async () => {
+    await test('a commit that finds the lock row taken runs again on fresh data', async (t) => {
       const name = namespace()
-      const other = await Valkeyrie.open(driverFor(name))
-      const db = await Valkeyrie.open(
-        interfereAfterRead(driverFor(name), () =>
-          other.set(['n'], new KvU64(10n)),
-        ),
+      const client = connect()
+      const db = await Valkeyrie.open(driverFor(name, client))
+      const attempts = countAttempts(t, client)
+      let dbCommit: Promise<{ ok: boolean }> | undefined
+      // The other client's commit holds the lock row while db commits.
+      const other = await Valkeyrie.open(
+        interfereAfterRead(driverFor(name), async () => {
+          dbCommit = db.atomic().sum(['n'], 1n).commit()
+          await setTimeout(20)
+        }),
       )
       try {
-        assert.ok((await db.atomic().sum(['n'], 1n).commit()).ok)
+        assert.ok((await other.atomic().sum(['n'], 10n).commit()).ok)
+        assert.ok((await dbCommit)?.ok)
+        assert.ok(attempts.count > 1, 'the commit ran again')
         assert.deepStrictEqual((await db.get(['n'])).value, new KvU64(11n))
       } finally {
         await db.close()
@@ -422,26 +504,30 @@ describe(
       }
     })
 
-    await test('a commit gives up after repeated conflicts', async () => {
+    await test('a commit or a plain write gives up after repeated conflicts', async (t) => {
       const name = namespace()
-      const other = await Valkeyrie.open(driverFor(name))
-      let interference = 0
-      const db = await Valkeyrie.open(
-        interfereAfterRead(
-          driverFor(name),
-          () => other.set(['n'], new KvU64(BigInt(++interference))),
-          Number.POSITIVE_INFINITY,
-        ),
+      const client = connect()
+      const db = await Valkeyrie.open(driverFor(name, client))
+      const attempts = countAttempts(t, client)
+      let dbCommit: { ok: boolean } | undefined
+      let commitAttempts = 0
+      let dbSet: unknown
+      // The other client's commit holds the lock row until db has given up.
+      const other = await Valkeyrie.open(
+        interfereAfterRead(driverFor(name), async () => {
+          dbCommit = await db.atomic().sum(['n'], 100n).commit()
+          commitAttempts = attempts.count
+          dbSet = await db.set(['x'], 1).catch((error: unknown) => error)
+        }),
       )
       try {
-        assert.deepStrictEqual(await db.atomic().sum(['n'], 100n).commit(), {
-          ok: false,
-        })
-        assert.ok(interference > 1, 'the commit was retried')
-        assert.deepStrictEqual(
-          (await db.get(['n'])).value,
-          new KvU64(BigInt(interference)),
-        )
+        assert.ok((await other.atomic().sum(['n'], 1n).commit()).ok)
+        assert.deepStrictEqual(dbCommit, { ok: false })
+        assert.strictEqual(commitAttempts, 10)
+        assert.ok(dbSet instanceof Error, 'the plain write rejects')
+        assert.strictEqual(attempts.count, 20)
+        assert.deepStrictEqual((await db.get(['n'])).value, new KvU64(1n))
+        assert.strictEqual((await db.get(['x'])).versionstamp, null)
       } finally {
         await db.close()
         await other.close()
@@ -450,19 +536,26 @@ describe(
 
     await test('a retried commit publishes only what it committed', async () => {
       const name = namespace()
-      const other = await Valkeyrie.open(driverFor(name))
+      // Valkeyrie writes cannot reach 'k' while the commit runs, so a write
+      // that bypasses the driver, and its lock row, makes the conflict.
+      let checked: string | undefined
       const db = await Valkeyrie.open(
-        interfereAfterRead(driverFor(name), () => other.set(['k'], 'other')),
+        interfereAfterRead(driverFor(name), () =>
+          entries.updateOne(
+            { namespace: name, versionstamp: checked },
+            { $set: { versionstamp: '0'.repeat(20) } },
+          ),
+        ),
       )
       const reader = db.watch([['side']]).getReader()
       try {
         assert.strictEqual((await readWithin(reader))?.[0]?.value, null)
-        const { versionstamp } = await db.set(['k'], 'mine')
+        checked = (await db.set(['k'], 'mine')).versionstamp
         // The first attempt writes 'side', then conflicts on 'k'. The retry
         // fails its check and writes nothing.
         const result = await db
           .atomic()
-          .check({ key: ['k'], versionstamp })
+          .check({ key: ['k'], versionstamp: checked })
           .set(['side'], 'never committed')
           .set(['k'], 'commit')
           .commit()
@@ -473,7 +566,6 @@ describe(
       } finally {
         await reader.cancel()
         await db.close()
-        await other.close()
       }
     })
 
