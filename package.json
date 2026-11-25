@@ -19,6 +19,10 @@
       "types": "./dist/driver.d.ts",
       "default": "./dist/driver.js"
     },
+    "./drivers/mongodb": {
+      "types": "./dist/mongodb-driver.d.ts",
+      "default": "./dist/mongodb-driver.js"
+    },
     "./drivers/redis": {
       "types": "./dist/redis-driver.d.ts",
       "default": "./dist/redis-driver.js"
@@ -119,6 +123,7 @@
     "husky": "^9.1.7",
     "ioredis": "^5.11.1",
     "lint-staged": "^15.4.3",
+    "mongodb": "^7.9.1",
     "rimraf": "^6.0.1",
     "typedoc": "^0.28.14",
     "typedoc-plugin-markdown": "^4.9.0",
@@ -136,6 +141,7 @@
     "bson": "^6.10.3",
     "cbor-x": "^1.6.0",
     "ioredis": "^5.0.0",
+    "mongodb": "^6.0.0 || ^7.0.0",
     "msgpackr": "^1.11.2"
   },
   "peerDependenciesMeta": {
@@ -146,6 +152,9 @@
       "optional": true
     },
     "ioredis": {
+      "optional": true
+    },
+    "mongodb": {
       "optional": true
     },
     "msgpackr": {

@@ -38,7 +38,7 @@ features:
 
   - icon: 🔌
     title: Pluggable Storage Drivers
-    details: SQLite by default, and a Redis and Valkey driver for databases that several processes share. Custom drivers are accessible by passing a driver function to the public `open()` API and via the `driverFn` option in factory methods.
+    details: SQLite by default, and Redis and Valkey and MongoDB drivers for databases that several processes share. Custom drivers are accessible by passing a driver function to the public `open()` API and via the `driverFn` option in factory methods.
 
   - icon: 🔒
     title: Multi-instance Safe

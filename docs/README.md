@@ -43,6 +43,12 @@ Feature-specific guides for different use cases:
   - Expiry, cleanup and memory policy
   - Atomic commits and `watch()` across processes
 
+- **[MongoDB Driver](./guides/mongodb-driver.md)**
+  - Sharing a database between processes
+  - Namespaces, including `ObjectId` namespaces
+  - Documents, indexes and cleanup
+  - Atomic commits and `watch()` across processes
+
 - **[Advanced Patterns](./guides/advanced-patterns.md)**
   - **Watch API** - Real-time key monitoring
   - Atomic operations
@@ -197,6 +203,7 @@ docs/
 │   ├── factory-methods.md      # Data import guide
 │   ├── serializers.md          # Serialization guide
 │   ├── redis-driver.md        # Redis and Valkey driver
+│   ├── mongodb-driver.md      # MongoDB driver
 │   └── advanced-patterns.md    # Advanced features
 └── api/                         # API reference
     ├── api-reference.md        # Method reference
